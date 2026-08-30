@@ -13,12 +13,19 @@ import (
 
 // InstrumentCache maps raw Binance symbol strings to normalised Instrument values.
 type InstrumentCache struct {
-	m map[string]model.Instrument
+	m    map[string]model.Instrument
+	norm map[model.Symbol]model.Instrument
 }
 
 // Lookup returns the Instrument for the given raw Binance symbol (e.g. "BTCUSDT").
 func (c *InstrumentCache) Lookup(rawSymbol string) (model.Instrument, bool) {
 	inst, ok := c.m[rawSymbol]
+	return inst, ok
+}
+
+// LookupByNormalized returns the Instrument for a normalised symbol (e.g. "BTC-USDT").
+func (c *InstrumentCache) LookupByNormalized(sym model.Symbol) (model.Instrument, bool) {
+	inst, ok := c.norm[sym]
 	return inst, ok
 }
 
@@ -43,7 +50,10 @@ func ParseExchangeInfo(data []byte) (*InstrumentCache, error) {
 		return nil, fmt.Errorf("binance: parse exchangeInfo: %w", err)
 	}
 
-	cache := &InstrumentCache{m: make(map[string]model.Instrument, len(resp.Symbols))}
+	cache := &InstrumentCache{
+		m:    make(map[string]model.Instrument, len(resp.Symbols)),
+		norm: make(map[model.Symbol]model.Instrument, len(resp.Symbols)),
+	}
 
 	for _, sym := range resp.Symbols {
 		if sym.Status != "TRADING" {
@@ -75,11 +85,13 @@ func ParseExchangeInfo(data []byte) (*InstrumentCache, error) {
 			return nil, fmt.Errorf("binance: symbol %s stepSize %q: %w", sym.Symbol, stepSize, err)
 		}
 
-		cache.m[sym.Symbol] = model.Instrument{
+		inst := model.Instrument{
 			Symbol:        model.Symbol(sym.BaseAsset + "-" + sym.QuoteAsset),
 			PriceDecimals: priceDec,
 			QtyDecimals:   qtyDec,
 		}
+		cache.m[sym.Symbol] = inst
+		cache.norm[inst.Symbol] = inst
 	}
 
 	return cache, nil
