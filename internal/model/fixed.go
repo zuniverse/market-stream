@@ -43,7 +43,18 @@ func ParseFixed(s string, decimals int) (int64, error) {
 	}
 
 	if len(fracPart) > decimals {
-		return 0, ErrTooManyDecimals
+		// Digits past the instrument exponent are acceptable only when they
+		// are all zeros, in which case dropping them loses nothing. Exchanges
+		// pad to a fixed width regardless of the symbol's tick size: Binance
+		// sends "78737.26000000" for a symbol whose tickSize is 0.01.
+		// ErrTooManyDecimals means "not representable at this exponent", not
+		// "longer than expected".
+		for i := decimals; i < len(fracPart); i++ {
+			if fracPart[i] != '0' {
+				return 0, ErrTooManyDecimals
+			}
+		}
+		fracPart = fracPart[:decimals]
 	}
 	if n := decimals - len(fracPart); n > 0 {
 		fracPart += strings.Repeat("0", n)
@@ -83,6 +94,42 @@ func ParsePrice(s string, decimals int) (Price, error) {
 func ParseQty(s string, decimals int) (Qty, error) {
 	v, err := ParseFixed(s, decimals)
 	return Qty(v), err
+}
+
+// FormatFixed renders v, a fixed-point value scaled to decimals fractional
+// digits, as a decimal string. It is the inverse of ParseFixed:
+//
+//	FormatFixed(123456, 2) -> "1234.56"
+//	FormatFixed(-5,     1) -> "-0.5"
+//	FormatFixed(1234,   0) -> "1234"
+//
+// The digits are assembled as text rather than by dividing by a power of ten,
+// so no intermediate value can overflow regardless of decimals.
+func FormatFixed(v int64, decimals int) string {
+	if decimals <= 0 {
+		return strconv.FormatInt(v, 10)
+	}
+
+	// Take the magnitude through uint64 so that math.MinInt64 negates safely.
+	mag := uint64(v)
+	if v < 0 {
+		mag = -mag
+	}
+	digits := strconv.FormatUint(mag, 10)
+	if len(digits) <= decimals {
+		digits = strings.Repeat("0", decimals-len(digits)+1) + digits
+	}
+	split := len(digits) - decimals
+
+	var b strings.Builder
+	b.Grow(len(digits) + 2)
+	if v < 0 {
+		b.WriteByte('-')
+	}
+	b.WriteString(digits[:split])
+	b.WriteByte('.')
+	b.WriteString(digits[split:])
+	return b.String()
 }
 
 // Notional multiplies p by q and returns the result along with an overflow

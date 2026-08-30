@@ -4,16 +4,16 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/zuniverse/market-stream/internal/exchange/binance"
-	"github.com/zuniverse/market-stream/internal/model"
+	"github.com/zuniverse/market-stream/internal/pipeline"
 )
 
 const (
@@ -21,32 +21,72 @@ const (
 	restBaseURL = "https://api.binance.com"
 )
 
+// config holds the parsed flag values.
+//
+// These names are provisional and do not yet match the surface committed in
+// D19 (-symbols, -endpoint, -shards, -metrics-addr). Reconciling them is a
+// separate change, since D19 treats a flag name as a public commitment.
+type config struct {
+	stream   string
+	interval time.Duration
+	chanCap  int
+	subCap   int
+}
+
 func main() {
-	stream := flag.String("stream", "btcusdt@aggTrade", "Binance stream name")
-	interval := flag.Duration("interval", 5*time.Second, "reporting interval")
-	chanCap := flag.Int("chan-cap", 1024, "frame channel capacity")
+	var cfg config
+	flag.StringVar(&cfg.stream, "stream", "btcusdt@aggTrade", "Binance stream name")
+	flag.DurationVar(&cfg.interval, "interval", 5*time.Second, "reporting interval")
+	flag.IntVar(&cfg.chanCap, "chan-cap", 1024, "raw frame channel capacity")
+	flag.IntVar(&cfg.subCap, "sub-cap", 1024, "per-subscriber channel capacity")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	if err := run(ctx, cfg); err != nil && !errors.Is(err, context.Canceled) {
+		log.Fatal(err)
+	}
+}
+
+// run owns the process lifetime. It returns context.Canceled on a clean
+// shutdown, which main treats as success.
+func run(ctx context.Context, cfg config) error {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	// Fetched once at startup. The cache serves both symbol normalisation in
+	// the decoder and decimal exponents in the log subscriber (D16).
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	cache, err := binance.FetchExchangeInfo(ctx, httpClient, restBaseURL)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	dec := binance.NewDecoder(cache)
 
-	frames := make(chan binance.Frame, *chanCap)
-	tr := binance.NewTransport(wsBase+"/"+*stream, frames)
+	// Every normalised event leaves this process through the publisher. The
+	// binary must not write pipeline events directly, or the fan-out seam goes
+	// untested until the milestone that makes changing it expensive (D17).
+	pub := pipeline.NewPublisher()
+	if err := pub.Subscribe(pipeline.NewLogSubscriber("stdout-log", logger, cache), cfg.subCap); err != nil {
+		return err
+	}
+	if err := pub.Start(ctx); err != nil {
+		return err
+	}
+	defer pub.Close()
 
+	frames := make(chan binance.Frame, cfg.chanCap)
+	tr := binance.NewTransport(wsBase+"/"+cfg.stream, frames)
+
+	// Owner: run. Exit: ctx cancelled, which is the only way Transport.Run
+	// returns. The buffer of 1 keeps the send from blocking after run returns.
 	errc := make(chan error, 1)
 	go func() { errc <- tr.Run(ctx) }()
 
-	ticker := time.NewTicker(*interval)
+	ticker := time.NewTicker(cfg.interval)
 	defer ticker.Stop()
 
-	var window, total int64
+	var window, total, decodeErrs int64
 	for {
 		select {
 		case f := <-frames:
@@ -54,47 +94,34 @@ func main() {
 			total++
 			ev, err := dec.Decode(f)
 			if err != nil {
-				log.Printf("decode: %v", err)
+				decodeErrs++
+				logger.LogAttrs(ctx, slog.LevelWarn, "decode", slog.String("err", err.Error()))
 				continue
 			}
-			if ev.Kind == model.KindTrade {
-				inst, ok := cache.LookupByNormalized(ev.Trade.Symbol)
-				if !ok {
-					continue
-				}
-				side := "sell"
-				if ev.Trade.IsBuy {
-					side = "buy"
-				}
-				fmt.Printf("trade %s price=%s qty=%s side=%s\n",
-					ev.Trade.Symbol,
-					formatFixed(int64(ev.Trade.Price), inst.PriceDecimals),
-					formatFixed(int64(ev.Trade.Qty), inst.QtyDecimals),
-					side,
-				)
-			}
+			pub.Publish(ev)
+
 		case <-ticker.C:
-			fmt.Printf("time=%s frames=%d total=%d\n",
-				time.Now().UTC().Format(time.RFC3339), window, total)
+			logger.LogAttrs(ctx, slog.LevelInfo, "summary",
+				slog.Int64("frames", window),
+				slog.Int64("total", total),
+				slog.Int64("decode_errors", decodeErrs),
+				droppedAttr(pub),
+			)
 			window = 0
+
 		case err := <-errc:
-			if err != nil && !errors.Is(err, context.Canceled) {
-				log.Fatal(err)
-			}
-			return
+			return err
 		}
 	}
 }
 
-// formatFixed formats a fixed-point int64 as a decimal string.
-// Assumes v >= 0.
-func formatFixed(v int64, decimals int) string {
-	if decimals == 0 {
-		return strconv.FormatInt(v, 10)
+// droppedAttr renders the publisher's per-subscriber drop counters as a log
+// group. M6 replaces this with a Prometheus counter.
+func droppedAttr(pub *pipeline.Publisher) slog.Attr {
+	counts := pub.Dropped()
+	attrs := make([]any, 0, len(counts))
+	for name, n := range counts {
+		attrs = append(attrs, slog.Uint64(name, n))
 	}
-	scale := int64(1)
-	for i := 0; i < decimals; i++ {
-		scale *= 10
-	}
-	return fmt.Sprintf("%d.%0*d", v/scale, decimals, v%scale)
+	return slog.Group("dropped", attrs...)
 }

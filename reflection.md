@@ -242,6 +242,110 @@ formatting, file moves) do not require an entry.
 
 ---
 
+## Session 2 -- M1.6 publisher and first subscriber (2026-08-30)
+
+### The fixtures were fiction, and the tests were happy about it
+
+The most important thing this session produced was not the publisher. It was
+the discovery, in the first twenty seconds of running the binary against the
+live feed, that the decoder had been rejecting every single trade since M1.4.
+
+`sizeDecimals` derives the exponent from `tickSize`, so `BTCUSDT` gets two
+decimals. Binance pads every decimal string to eight fractional digits
+regardless of tick size, so the wire carries `"78737.26000000"`. `ParseFixed`
+compared lengths and returned `ErrTooManyDecimals`. Decode error rate: one
+hundred percent.
+
+The unit tests passed throughout. The reason is the part worth keeping: the
+fixtures in `testdata/` were hand-written to `"p": "50000.01"`, the shape the
+implementer expected, rather than captured from the wire. A fixture written
+from an assumption tests that the code matches the assumption. It cannot
+detect that the assumption is wrong, and it produces a green suite while doing
+it, which is worse than no test because it actively creates confidence.
+
+The roadmap already said the right thing. M1.4 reads "table driven tests over
+real payloads **captured during M1.3** and saved as fixtures". M1.3 built a
+frame counter that printed totals and threw the frames away, so there was
+nothing to capture from, and the fixtures got invented instead. The
+instruction was followed in form and inverted in substance.
+
+This is D7 ("real captured data, not a synthetic generator") applying one
+level lower than where it was written. D7 argues about the profiling corpus.
+The same argument holds for a four-line JSON fixture, and for exactly the same
+reason: a generator, or a developer, only produces what was modelled. The
+eight-digit padding is precisely the kind of detail nobody models.
+
+Two consequences worth carrying forward:
+
+1. M3 should backfill the fixtures from real recorded frames, since by then
+   the recorder exists and there is no excuse. Until then, any new fixture
+   gets pasted from an actual captured frame, not typed.
+
+2. A milestone whose done-criterion is observational ("verifiable by eye
+   against the exchange's own display") is not met by a passing test suite.
+   M1.4 was marked done without that observation being made. The criterion was
+   right; it just was not executed.
+
+### The bug was found by running the thing, in twelve seconds
+
+Worth stating plainly because it is easy to forget under a green suite: the
+entire cost of finding a one-hundred-percent failure was building the binary
+and letting it print for twelve seconds. No test that existed would ever have
+found it, and no amount of additional unit testing against the same fixtures
+would have either.
+
+### On the publisher shutdown semantics (D20)
+
+The interesting decision was the delivery goroutine's exit condition, and the
+appealing answer was wrong. The reflex is `select` over the event channel and
+`ctx.Done()`, because `CLAUDE.md` says every long-running goroutine takes a
+context. But `select` with both cases ready chooses at random, so cancelling
+the context discards an arbitrary prefix of whatever is still queued.
+
+The channel is bounded. That is the whole point of the backpressure policy,
+and it means draining on shutdown is bounded work with a known cost. So the
+exit condition is channel close, and `ctx` goes to `Consume` for the
+subscriber's own use.
+
+The general shape: "thread a context through every goroutine" is about
+cancellation reaching the goroutine, not about the context being the exit
+condition. Those are different claims and only the first is in `CLAUDE.md`.
+
+### Refining the M1 verification checklist from Session 1
+
+Item 1 said a `grep` for `log.Printf` outside the subscriber would be a red
+flag. That needs a distinction it did not make. `ingestd` legitimately logs
+operator diagnostics directly: decode failures and the periodic summary. What
+must not bypass the publisher is normalised **events**. The check is not
+"does the binary log" but "does any `model.Event` reach an output without
+passing through `Publish`". Currently none does.
+
+Item 4 said `grep -r float64 internal/` should return empty. It earned its
+keep immediately, on the test code rather than the production code: unmarshal
+a JSON log record into `map[string]any` and every number becomes a `float64`.
+Fixed with `Decoder.UseNumber`. Small, but it is the constraint working as
+intended, and the test is more precise for it.
+
+### Still open after this session
+
+- The `ingestd` flag surface still does not match D19. `-stream` also takes a
+  raw Binance stream name, which leaks an exchange-specific format into
+  `cmd/`. Reconciling it is its own change because D19 makes flag names a
+  commitment.
+- `internal/exchange/binance/conn.go` is dead. `Transport` replaced it in
+  M1.5 and nothing references `Conn`.
+- The reconnect backoff never resets after a connection that succeeded. A
+  socket that lives six hours and then drops resumes at the last backoff
+  value rather than at 500ms.
+- Where the `Exchange` interface lives is still undecided. M1.6 did not need
+  it. M2 or M3 will.
+- `ParseFixed` allocates twice per call, in `strings.Repeat` and in the
+  `intPart+fracPart` concatenation. Noted, not touched: D8 and the "no
+  optimisation without a profile" rule both say the profile comes first, and
+  this is exactly the kind of thing M4 exists to either confirm or dismiss.
+
+---
+
 _This file is updated as the project develops. Entries are appended, not
 edited. If an observation here turns out to be wrong, note the correction in
 a new entry rather than revising the original._

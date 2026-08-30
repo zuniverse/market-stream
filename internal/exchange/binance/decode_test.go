@@ -30,8 +30,9 @@ func TestDecode(t *testing.T) {
 			file: "agg_trade.json",
 			kind: model.KindTrade,
 			check: func(t *testing.T, ev model.Event) {
-				// "50000.01" with priceDecimals=2 -> 5000001
-				// "0.12345"  with qtyDecimals=5   -> 12345
+				// Binance pads to 8 fractional digits whatever the tickSize:
+				// "50000.01000000" with priceDecimals=2 -> 5000001
+				// "0.12345000"     with qtyDecimals=5   -> 12345
 				// m=false -> IsBuy=true
 				if ev.Trade.Symbol != "BTC-USDT" {
 					t.Errorf("Symbol = %q, want BTC-USDT", ev.Trade.Symbol)
@@ -62,15 +63,15 @@ func TestDecode(t *testing.T) {
 				if len(d.Bids) != 2 || len(d.Asks) != 2 {
 					t.Fatalf("bids=%d asks=%d, want 2/2", len(d.Bids), len(d.Asks))
 				}
-				// "50000.00" -> 5000000, "1.23456" -> 123456
+				// "50000.00000000" -> 5000000, "1.23456000" -> 123456
 				if d.Bids[0].Price != model.Price(5000000) || d.Bids[0].Qty != model.Qty(123456) {
 					t.Errorf("Bids[0] = %+v, want {5000000 123456}", d.Bids[0])
 				}
-				// "49999.99" -> 4999999, "0.00000" -> 0
+				// A zero quantity is a level deletion, not a missing field.
 				if d.Bids[1].Price != model.Price(4999999) || d.Bids[1].Qty != model.Qty(0) {
 					t.Errorf("Bids[1] = %+v, want {4999999 0}", d.Bids[1])
 				}
-				// "50000.01" -> 5000001, "2.34567" -> 234567
+				// "50000.01000000" -> 5000001, "2.34567000" -> 234567
 				if d.Asks[0].Price != model.Price(5000001) || d.Asks[0].Qty != model.Qty(234567) {
 					t.Errorf("Asks[0] = %+v, want {5000001 234567}", d.Asks[0])
 				}

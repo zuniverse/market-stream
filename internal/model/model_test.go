@@ -45,9 +45,20 @@ func TestParseFixed(t *testing.T) {
 		// Overflow due to decimal scaling: 92233720368547758.08 -> 9223372036854775808 > MaxInt64.
 		{"92233720368547758.08", 2, 0, model.ErrOverflow},
 
-		// Too many fractional digits.
+		// Trailing zeros past the exponent are dropped, not rejected: the
+		// exchange pads every value to a fixed width regardless of tickSize.
+		{"78737.26000000", 2, 7873726, nil},
+		{"50000.01000000", 2, 5000001, nil},
+		{"1234.5600", 2, 123456, nil},
+		{"1.00000000", 0, 1, nil},
+		{"-78737.26000000", 2, -7873726, nil},
+		{"0.00000000", 2, 0, nil},
+
+		// Too many fractional digits: a non-zero digit would be truncated.
 		{"1234.567", 2, 0, model.ErrTooManyDecimals},
 		{"0.001", 2, 0, model.ErrTooManyDecimals},
+		{"78737.26100000", 2, 0, model.ErrTooManyDecimals},
+		{"1.00000001", 2, 0, model.ErrTooManyDecimals},
 
 		// Invalid syntax.
 		{"", 2, 0, model.ErrInvalidSyntax},
@@ -92,6 +103,60 @@ func TestParseQty(t *testing.T) {
 	}
 	if q != model.Qty(10_000_000) {
 		t.Errorf("got %d, want 10000000", q)
+	}
+}
+
+func TestFormatFixed(t *testing.T) {
+	tests := []struct {
+		v        int64
+		decimals int
+		want     string
+	}{
+		{123456, 2, "1234.56"},
+		{123450, 2, "1234.50"},
+		{123400, 2, "1234.00"},
+		{1234, 0, "1234"},
+		{0, 2, "0.00"},
+		{0, 0, "0"},
+
+		// Value shorter than the exponent: needs a zero-padded integer part.
+		{5, 1, "0.5"},
+		{50, 2, "0.50"},
+		{1234, 8, "0.00001234"},
+		{100_000_000, 8, "1.00000000"},
+
+		// Negative values, including the one that cannot be negated as int64.
+		{-123456, 2, "-1234.56"},
+		{-5, 1, "-0.5"},
+		{-1, 8, "-0.00000001"},
+		{math.MinInt64, 0, "-9223372036854775808"},
+		{math.MinInt64, 2, "-92233720368547758.08"},
+		{math.MaxInt64, 2, "92233720368547758.07"},
+	}
+
+	for _, tc := range tests {
+		if got := model.FormatFixed(tc.v, tc.decimals); got != tc.want {
+			t.Errorf("FormatFixed(%d, %d) = %q, want %q", tc.v, tc.decimals, got, tc.want)
+		}
+	}
+}
+
+// TestFormatFixedRoundTrip checks that FormatFixed is the inverse of
+// ParseFixed for every value ParseFixed can produce.
+func TestFormatFixedRoundTrip(t *testing.T) {
+	values := []int64{0, 1, -1, 5, -5, 123456, -123456, 100_000_000, math.MaxInt64, math.MinInt64}
+	for _, decimals := range []int{0, 1, 2, 8} {
+		for _, v := range values {
+			s := model.FormatFixed(v, decimals)
+			got, err := model.ParseFixed(s, decimals)
+			if err != nil {
+				t.Errorf("ParseFixed(FormatFixed(%d, %d)) = %q: %v", v, decimals, s, err)
+				continue
+			}
+			if got != v {
+				t.Errorf("round trip of %d at %d decimals via %q gave %d", v, decimals, s, got)
+			}
+		}
 	}
 }
 

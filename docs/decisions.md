@@ -354,3 +354,104 @@ sources -- premature abstraction for a binary with four flags.
 documentation into a shell. The asymmetry is the same as D11: adding a config
 file layer later is painless; removing a flag that adopters have scripted is a
 breaking change.
+
+---
+
+## D20. Publisher owns the subscriber goroutines; shutdown drains
+
+**Chosen:** `Subscriber` is an interface with `Name() string` and
+`Consume(ctx, model.Event)`. The `Publisher` owns one delivery goroutine per
+subscriber, and that goroutine's sole exit condition is its channel being
+closed by `Publisher.Close()`. The lifecycle is `Subscribe* -> Start ->
+Publish* -> Close`, with `Subscribe` failing once started and `Publish`
+required to come from a single goroutine.
+
+**Rejected:** handing each subscriber a `<-chan Event` and letting it own its
+goroutine. Goroutine ownership diffuses across packages, every subscriber
+reimplements the same receive loop, and the drop accounting can no longer be
+enforced centrally because the publisher stops being the only writer.
+
+**Rejected:** exiting the delivery goroutines on `ctx.Done()`, via a `select`
+over the channel and the context. A `select` with both cases ready picks at
+random, so a cancelled context discards an arbitrary prefix of a non-empty
+queue. Every shutdown would then lose the tail of the stream for no benefit:
+the channel is bounded, so draining it is bounded work with a known cost.
+`ctx` is still passed into `Consume` so that a subscriber doing real work can
+abandon it.
+
+**Why:** the single-owner property that D3 establishes for book shards is
+worth having at the publisher too. One goroutine per subscriber means a
+`Consume` implementation needs no internal locking and sees events in
+publication order, which is the same guarantee the shard loops give. Fixing
+the subscriber set at `Start` is what lets `Publish` read the slice on the hot
+path without synchronisation.
+
+The consequence to accept: `Close` waits for the in-flight `Consume` call, so
+a subscriber that blocks forever hangs shutdown. That is stated in the
+interface documentation rather than defended against, because the alternative
+is a timeout whose correct value is unknowable from inside the publisher.
+
+---
+
+## D21. `log/slog` for the log subscriber, with a consumer-side instrument interface
+
+**Chosen:** the standard library `log/slog` with a JSON handler. The
+subscriber resolves decimal exponents through an `Instruments` interface
+declared in `internal/pipeline`, which `*binance.InstrumentCache` satisfies
+without knowing that package exists.
+
+**Rejected:** `zerolog` or `zap`. The only argument for them is throughput on
+the logging path, and that path is explicitly the lossy one: a slow subscriber
+costs itself dropped events and nothing else. Paying a dependency for
+performance the architecture already says is not needed is the wrong trade.
+
+**Rejected:** passing `*binance.InstrumentCache` into the subscriber directly.
+It compiles and it is what the wiring in `ingestd` has to hand, but it puts an
+exchange-specific type in a signature outside `internal/exchange/`, which the
+constraint in `CLAUDE.md` forbids. The point of that rule is that a second
+exchange must not require edits elsewhere, and a concrete cache type in
+`pipeline` would guarantee exactly that edit.
+
+**Why:** D14 keeps the decimal exponent out of the `Price` value, so anything
+that renders a price needs a lookup. Declaring the lookup as a one-method
+interface at the point of use is the ordinary Go answer, and it makes the
+architectural rule mechanical rather than a matter of discipline: `pipeline`
+has no import of `internal/exchange` for a compiler to permit in the first
+place.
+
+---
+
+## D22. `ErrTooManyDecimals` means "not representable", not "longer than expected"
+
+**Chosen:** `ParseFixed` accepts fractional digits beyond the instrument
+exponent when all of them are zeros, and truncates them. It returns
+`ErrTooManyDecimals` only when a non-zero digit would be lost.
+
+**Rejected:** rejecting any string with more fractional digits than the
+exponent, which is what the M1.1 implementation did. Binance pads every
+decimal to eight fractional digits regardless of the symbol's `tickSize`, so
+`BTCUSDT`, whose `tickSize` is `0.01`, arrives as `"78737.26000000"`. Under
+the strict rule the decoder rejected one hundred percent of live trades while
+the unit tests passed, because the fixtures had been hand-written to the
+expected shape rather than captured from the wire.
+
+**Rejected:** giving every instrument eight decimals and ignoring `tickSize`.
+It parses everything, but it discards the tick size information that the book
+stage needs, and it inflates every stored magnitude by up to a million, which
+costs headroom in the `Notional` product for no gain.
+
+**Rejected:** trimming trailing zeros in the Binance decoder before calling
+`ParseFixed`. It pushes a numeric-representation concern into an exchange
+package, scans the string twice, and would have to be repeated in the next
+exchange added.
+
+**Why:** the exponent describes what the instrument can represent, not how the
+exchange chose to format the value. `"78737.26000000"` and `"78737.26"` are
+the same number, and a parser that accepts one and rejects the other is
+enforcing a formatting convention while claiming to enforce a precision
+constraint. The genuine constraint, that no significant digit may be silently
+discarded, is preserved exactly.
+
+**Consequence:** the fixtures in `internal/exchange/binance/testdata/` are now
+required to match the wire format byte for byte. See the note in
+`reflection.md` on why hand-written fixtures defeated the test.
