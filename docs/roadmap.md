@@ -20,12 +20,59 @@ book stage.
 
 ### M1. Skeleton and transport
 
-Module, package layout, `Event` and fixed-point price types, websocket
-connection to Binance, trade decoding, output. Reconnection with exponential
-backoff and jitter belongs here, not bolted on afterwards.
+Split into six steps. Each step is a single short session with a small file
+footprint. Commit between steps.
 
-Done when: trades stream continuously and the process recovers from a
-forcibly closed connection without operator action.
+#### M1.1 Core types
+
+`internal/model` only: `Price`, `Qty`, `Symbol`, `EventKind`, the tagged
+`Event` struct, and string to fixed-point conversion. No I/O, no dependencies.
+Unit tests on parsing, boundary values, and overflow of the price times
+quantity product.
+
+Done when: tests pass and nothing else exists yet.
+
+#### M1.2 Instrument metadata
+
+REST client for `exchangeInfo`, extraction of `baseAsset`, `quoteAsset`,
+`tickSize` and `stepSize`, in-memory cache, symbol normalisation. Tested
+against a recorded JSON fixture, with no network access in tests.
+
+Done when: `BTCUSDT` and `USDTTRY` both split correctly into base and quote.
+
+#### M1.3 Raw transport
+
+Websocket connection, frame reading, raw bytes forwarded with a receive
+timestamp on a bounded channel. No decoding at this step. A minimal
+`cmd/ingestd` that counts frames and prints a periodic total.
+
+Done when: the stream runs for several minutes and the counter increases.
+
+#### M1.4 Decoding
+
+Raw bytes to normalised `Event` values using `encoding/json` per D8. Table
+driven tests over real payloads captured during M1.3 and saved as fixtures.
+
+Done when: trades print with correct prices and quantities, verifiable by eye
+against the exchange's own display.
+
+#### M1.5 Reconnection
+
+Exponential backoff with jitter, `serverShutdown` handling, context
+cancellation propagation, clean shutdown on SIGINT. A test that simulates a
+dropped connection and asserts recovery.
+
+Done when: killing the connection by hand leaves the process running and
+reconnected, with no operator action.
+
+#### M1.6 Publisher and first subscriber
+
+`internal/pipeline`: publisher, subscriber registration, one bounded channel
+per subscriber, drop-oldest policy with a per-subscriber dropped counter. A
+structured logging subscriber. Wired into `ingestd`.
+
+Done when: the full M1 done criterion is met, and the publisher seam is
+exercised rather than bypassed.
 
 ### M2. Order book
 
