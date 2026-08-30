@@ -1,0 +1,58 @@
+{
+  "timezone": "UTC",
+  "serverTime": 1724000000000,
+  "symbols": [
+    {
+      "symbol": "BTCUSDT",
+      "status": "TRADING",
+      "baseAsset": "BTC",
+      "quoteAsset": "USDT",
+      "filters": [
+        {
+          "filterType": "PRICE_FILTER",
+          "minPrice": "0.01000000",
+          "maxPrice": "1000000.00000000",
+          "tickSize": "0.01000000"
+        },
+        {
+          "filterType": "PERCENT_PRICE",
+          "multiplierUp": "5",
+          "multiplierDown": "0.2"
+        },
+        {
+          "filterType": "LOT_SIZE",
+          "minQty": "0.00001000",
+          "maxQty": "9000.00000000",
+          "stepSize": "0.00001000"
+        }
+      ]
+    },
+    {
+      "symbol": "USDTTRY",
+      "status": "TRADING",
+      "baseAsset": "USDT",
+      "quoteAsset": "TRY",
+      "filters": [
+        {
+          "filterType": "PRICE_FILTER",
+          "minPrice": "0.00100000",
+          "maxPrice": "100000.00000000",
+          "tickSize": "0.00100000"
+        },
+        {
+          "filterType": "LOT_SIZE",
+          "minQty": "1.00000000",
+          "maxQty": "9000000.00000000",
+          "stepSize": "1.00000000"
+        }
+      ]
+    },
+    {
+      "symbol": "BNBBTC",
+      "status": "BREAK",
+      "baseAsset": "BNB",
+      "quoteAsset": "BTC",
+      "filters": []
+    }
+  ]
+}
