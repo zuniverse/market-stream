@@ -1,0 +1,28 @@
+# Compiled binaries
+/bin/
+/cmd/ingestd/ingestd
+/cmd/replay/replay
+/cmd/loadgen/loadgen
+
+# Recorded frame files and capture data
+*.zst
+/data/
+
+# Profile artefacts
+*.pprof
+*.prof
+*.pb.gz
+
+# Benchmark and benchstat output
+*.bench
+benchstat*.txt
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
