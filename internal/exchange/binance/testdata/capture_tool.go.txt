@@ -1,0 +1,153 @@
+// Command capture records a paired Binance depth capture: the websocket
+// delta stream and a REST snapshot taken while that stream is buffering.
+//
+// The order matters and is the documented resync procedure: the websocket is
+// connected and buffering BEFORE the snapshot is fetched, so that no delta
+// falls into the gap between the two. A snapshot fetched first would leave a
+// hole no capture can show.
+//
+// This is a throwaway used to produce test fixtures from real wire bytes. The
+// real recorder is M3.
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+func main() {
+	symbol := flag.String("symbol", "BTCUSDT", "raw Binance symbol")
+	limit := flag.Int("limit", 20, "REST depth limit")
+	seconds := flag.Int("seconds", 10, "how long to buffer the delta stream")
+	delay := flag.Int("snapshot-after", 3, "seconds to buffer before fetching the snapshot")
+	outDir := flag.String("out", ".", "directory to write captures into")
+	flag.Parse()
+
+	stream := fmt.Sprintf("wss://stream.binance.com:9443/ws/%s@depth@100ms", strings.ToLower(*symbol))
+	conn, _, err := websocket.DefaultDialer.Dial(stream, nil)
+	if err != nil {
+		log.Fatalf("dial %s: %v", stream, err)
+	}
+	defer conn.Close()
+	log.Printf("connected to %s", stream)
+
+	type frame struct {
+		Recv time.Time
+		Data []byte
+	}
+	var (
+		mu     sync.Mutex
+		frames []frame
+	)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			frames = append(frames, frame{Recv: time.Now().UTC(), Data: data})
+			mu.Unlock()
+		}
+	}()
+
+	// Buffer first, then snapshot. This is the ordering the resync depends on.
+	time.Sleep(time.Duration(*delay) * time.Second)
+	url := fmt.Sprintf("https://api.binance.com/api/v3/depth?symbol=%s&limit=%d", *symbol, *limit)
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Fatalf("fetch depth: %v", err)
+	}
+	snapBody, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		log.Fatalf("read depth: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("depth: HTTP %d: %s", resp.StatusCode, snapBody)
+	}
+	log.Printf("snapshot fetched (%d bytes) after %ds of buffering", len(snapBody), *delay)
+
+	time.Sleep(time.Duration(*seconds-*delay) * time.Second)
+	conn.Close()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	log.Printf("captured %d delta frames", len(frames))
+
+	snapPath := filepath.Join(*outDir, "depth_snapshot.raw.json")
+	if err := os.WriteFile(snapPath, snapBody, 0o644); err != nil {
+		log.Fatal(err)
+	}
+
+	// Frames are written one raw payload per line, exactly as received.
+	framePath := filepath.Join(*outDir, "depth_frames.ndjson")
+	f, err := os.Create(framePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, fr := range frames {
+		f.Write(fr.Data)
+		f.Write([]byte("\n"))
+	}
+	f.Close()
+
+	// The point of the capture: show how the snapshot id sits against the
+	// delta ids, so the M2.3 classification boundary rests on observed bytes.
+	var snap struct {
+		LastUpdateID int64 `json:"lastUpdateId"`
+	}
+	if err := json.Unmarshal(snapBody, &snap); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("\nsnapshot lastUpdateId = %d\n", snap.LastUpdateID)
+	fmt.Printf("%-6s %-14s %-14s %-9s %s\n", "idx", "U (firstId)", "u (lastId)", "u-U+1", "vs snapshot")
+	firstApplicable := -1
+	var prevU int64
+	for i, fr := range frames {
+		var d struct {
+			U int64 `json:"U"`
+			Lu int64 `json:"u"`
+		}
+		if err := json.Unmarshal(fr.Data, &d); err != nil {
+			continue
+		}
+		note := ""
+		switch {
+		case d.Lu <= snap.LastUpdateID:
+			note = "stale, discard"
+		case d.U <= snap.LastUpdateID+1 && d.Lu >= snap.LastUpdateID+1:
+			note = "FIRST TO APPLY"
+			if firstApplicable < 0 {
+				firstApplicable = i
+			}
+		default:
+			note = "after the first"
+		}
+		contig := ""
+		if i > 0 {
+			if d.U == prevU+1 {
+				contig = " contiguous"
+			} else {
+				contig = fmt.Sprintf(" GAP: U=%d but prev u=%d", d.U, prevU)
+			}
+		}
+		fmt.Printf("%-6d %-14d %-14d %-9d %s%s\n", i, d.U, d.Lu, d.Lu-d.U+1, note, contig)
+		prevU = d.Lu
+	}
+	fmt.Printf("\nwrote %s and %s\n", snapPath, framePath)
+}

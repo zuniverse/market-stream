@@ -1,6 +1,7 @@
 package binance_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zuniverse/market-stream/internal/book"
 	"github.com/zuniverse/market-stream/internal/exchange/binance"
@@ -50,24 +52,24 @@ func TestParseDepth(t *testing.T) {
 	if snap.Symbol != "BTC-USDT" {
 		t.Errorf("Symbol = %q, want BTC-USDT: the body carries none, so it comes from the instrument", snap.Symbol)
 	}
-	if snap.LastID != 78392058251 {
-		t.Errorf("LastID = %d, want 78392058251", snap.LastID)
+	if snap.LastID != 99521168819 {
+		t.Errorf("LastID = %d, want 99521168819", snap.LastID)
 	}
-	if len(snap.Bids) != 4 || len(snap.Asks) != 4 {
-		t.Fatalf("got %d bids and %d asks, want 4 and 4", len(snap.Bids), len(snap.Asks))
+	if len(snap.Bids) != 20 || len(snap.Asks) != 20 {
+		t.Fatalf("got %d bids and %d asks, want 20 and 20", len(snap.Bids), len(snap.Asks))
 	}
 
-	// Fixed point at the instrument's exponents: 78737.26 at two price
-	// decimals, 0.00104 at five quantity decimals. The wire pads both to
+	// Fixed point at the instrument's exponents: 77798.66 at two price
+	// decimals, 1.49168 at five quantity decimals. The wire pads both to
 	// eight fractional digits regardless (D22).
-	if want := (model.Level{Price: 7873726, Qty: 104}); snap.Bids[0] != want {
+	if want := (model.Level{Price: 7779866, Qty: 149168}); snap.Bids[0] != want {
 		t.Errorf("Bids[0] = %+v, want %+v", snap.Bids[0], want)
 	}
-	if want := (model.Level{Price: 7873727, Qty: 5000}); snap.Asks[0] != want {
+	if want := (model.Level{Price: 7779867, Qty: 45495}); snap.Asks[0] != want {
 		t.Errorf("Asks[0] = %+v, want %+v", snap.Asks[0], want)
 	}
-	if want := (model.Level{Price: 7873650, Qty: 132500}); snap.Bids[3] != want {
-		t.Errorf("Bids[3] = %+v, want %+v", snap.Bids[3], want)
+	if want := (model.Level{Price: 7779523, Qty: 26}); snap.Bids[19] != want {
+		t.Errorf("Bids[19] = %+v, want %+v", snap.Bids[19], want)
 	}
 	if snap.Truncated {
 		t.Error("Truncated = true for a response far short of the limit")
@@ -87,16 +89,16 @@ func TestSnapshotLoadsIntoBook(t *testing.T) {
 		t.Fatalf("Reset from snapshot: %v", err)
 	}
 
-	if b.BidDepth() != 4 || b.AskDepth() != 4 {
-		t.Errorf("depth = %d bids, %d asks, want 4 and 4", b.BidDepth(), b.AskDepth())
+	if b.BidDepth() != 20 || b.AskDepth() != 20 {
+		t.Errorf("depth = %d bids, %d asks, want 20 and 20", b.BidDepth(), b.AskDepth())
 	}
 	bestBid, ok := b.BestBid()
-	if !ok || bestBid.Price != 7873726 || bestBid.Qty != 104 {
-		t.Errorf("BestBid = %+v, %v, want price 7873726 qty 104", bestBid, ok)
+	if !ok || bestBid.Price != 7779866 || bestBid.Qty != 149168 {
+		t.Errorf("BestBid = %+v, %v, want price 7779866 qty 149168", bestBid, ok)
 	}
 	bestAsk, ok := b.BestAsk()
-	if !ok || bestAsk.Price != 7873727 || bestAsk.Qty != 5000 {
-		t.Errorf("BestAsk = %+v, %v, want price 7873727 qty 5000", bestAsk, ok)
+	if !ok || bestAsk.Price != 7779867 || bestAsk.Qty != 45495 {
+		t.Errorf("BestAsk = %+v, %v, want price 7779867 qty 45495", bestAsk, ok)
 	}
 	if b.Crossed() {
 		t.Error("book loaded from a snapshot is crossed")
@@ -104,11 +106,11 @@ func TestSnapshotLoadsIntoBook(t *testing.T) {
 
 	// Rendered back through the instrument's exponents, this is the pair a
 	// reader can check against the exchange's own display by eye.
-	if got := model.FormatFixed(int64(bestBid.Price), btcusdt.PriceDecimals); got != "78737.26" {
-		t.Errorf("best bid renders as %q, want \"78737.26\"", got)
+	if got := model.FormatFixed(int64(bestBid.Price), btcusdt.PriceDecimals); got != "77798.66" {
+		t.Errorf("best bid renders as %q, want \"77798.66\"", got)
 	}
-	if got := model.FormatFixed(int64(bestAsk.Qty), btcusdt.QtyDecimals); got != "0.05000" {
-		t.Errorf("best ask qty renders as %q, want \"0.05000\"", got)
+	if got := model.FormatFixed(int64(bestAsk.Qty), btcusdt.QtyDecimals); got != "0.45495" {
+		t.Errorf("best ask qty renders as %q, want \"0.45495\"", got)
 	}
 
 	// The snapshot is ordered on the wire, but the book must not depend on
@@ -149,9 +151,9 @@ func TestParseDepthTruncation(t *testing.T) {
 		limit int
 		want  bool
 	}{
-		{"limit above the levels returned", 10, false},
-		{"limit exactly the levels returned", 4, true},
-		{"limit below the levels returned", 2, true},
+		{"limit above the levels returned", binance.MaxDepthLimit, false},
+		{"limit exactly the levels returned", 20, true},
+		{"limit below the levels returned", 10, true},
 	}
 
 	for _, tt := range tests {
@@ -248,7 +250,7 @@ func TestDepthClientSnapshot(t *testing.T) {
 	if got := gotQuery.Get("limit"); got != "5000" {
 		t.Errorf("limit param = %q, want 5000", got)
 	}
-	if snap.Symbol != "BTC-USDT" || snap.LastID != 78392058251 || len(snap.Bids) != 4 {
+	if snap.Symbol != "BTC-USDT" || snap.LastID != 99521168819 || len(snap.Bids) != 20 {
 		t.Errorf("snapshot = %+v", snap)
 	}
 }
@@ -304,4 +306,100 @@ func TestDepthClientContextCancelled(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Snapshot with a cancelled context = %v, want it to wrap context.Canceled", err)
 	}
+}
+
+// TestDecodeCapturedDepthStream runs the captured delta frames through the
+// decoder as raw wire bytes.
+//
+// It exists because of D22: the fixtures that let a broken decoder pass every
+// test were hand-written to the shape the code expected, so they could only
+// ever confirm that expectation. These bytes came off the socket, so the
+// assertions below are about Binance's behaviour rather than about mine.
+func TestDecodeCapturedDepthStream(t *testing.T) {
+	dec := binance.NewDecoder(loadCache(t))
+	frames := capturedFrames(t)
+	if len(frames) != 13 {
+		t.Fatalf("fixture holds %d frames, want 13", len(frames))
+	}
+
+	var prevLast int64
+	for i, data := range frames {
+		ev, err := dec.Decode(binance.Frame{Data: data, ReceivedAt: time.Now()})
+		if err != nil {
+			t.Fatalf("frame %d: Decode: %v", i, err)
+		}
+		if ev.Kind != model.KindBookDelta {
+			t.Fatalf("frame %d: Kind = %d, want KindBookDelta", i, ev.Kind)
+		}
+		d := ev.BookDelta
+		if d.Symbol != "BTC-USDT" {
+			t.Errorf("frame %d: Symbol = %q", i, d.Symbol)
+		}
+		if d.FirstID > d.LastID {
+			t.Errorf("frame %d: U %d is above u %d", i, d.FirstID, d.LastID)
+		}
+		// One frame carries a whole range of update ids, not one each. Any
+		// sequencing built on a single incrementing counter would be wrong,
+		// and this capture spans 6 to over a thousand ids per frame.
+		if d.LastID == d.FirstID {
+			t.Logf("frame %d covers a single update id, which is legal but rare", i)
+		}
+		// Contiguity on an uninterrupted stream: the next frame opens exactly
+		// where the previous one closed. This held across all 102 frames of
+		// the capture these 13 were taken from.
+		if i > 0 && d.FirstID != prevLast+1 {
+			t.Errorf("frame %d: U = %d, want %d to continue the previous frame", i, d.FirstID, prevLast+1)
+		}
+		prevLast = d.LastID
+	}
+}
+
+// TestCapturedStreamStraddlesSnapshot pins the relationship between the
+// captured snapshot and the captured deltas, which is the input M2.3
+// classifies. The websocket was connected and buffering before the snapshot
+// was fetched, so the two genuinely overlap in time.
+func TestCapturedStreamStraddlesSnapshot(t *testing.T) {
+	snap, err := binance.ParseDepth(fixture(t, "depth_snapshot.json"), btcusdt, 20)
+	if err != nil {
+		t.Fatalf("ParseDepth: %v", err)
+	}
+	if !snap.Truncated {
+		t.Error("Truncated = false for a 20 level response fetched at limit 20")
+	}
+
+	dec := binance.NewDecoder(loadCache(t))
+	var stale, first, after int
+	for i, data := range capturedFrames(t) {
+		ev, err := dec.Decode(binance.Frame{Data: data})
+		if err != nil {
+			t.Fatalf("frame %d: %v", i, err)
+		}
+		d := ev.BookDelta
+		switch {
+		case d.LastID <= snap.LastID:
+			stale++
+		case d.FirstID <= snap.LastID+1:
+			first++
+		default:
+			after++
+		}
+	}
+	// Four frames were already folded into the snapshot, one carries the
+	// first update the snapshot does not have, and the rest follow it.
+	if stale != 4 || first != 1 || after != 8 {
+		t.Errorf("classification = %d stale, %d first, %d after; want 4, 1, 8", stale, first, after)
+	}
+}
+
+// capturedFrames returns the raw payloads from the captured delta stream, one
+// per line, exactly as they arrived on the socket.
+func capturedFrames(t *testing.T) [][]byte {
+	t.Helper()
+	var out [][]byte
+	for _, line := range bytes.Split(fixture(t, "depth_stream.ndjson"), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) > 0 {
+			out = append(out, line)
+		}
+	}
+	return out
 }
