@@ -455,3 +455,67 @@ discarded, is preserved exactly.
 **Consequence:** the fixtures in `internal/exchange/binance/testdata/` are now
 required to match the wire format byte for byte. See the note in
 `reflection.md` on why hand-written fixtures defeated the test.
+
+---
+
+## D23. Book side representation: sorted slice with binary search
+
+**Chosen:** each side of a book is a `[]model.Level` kept sorted so that index
+0 is the top of book. Bids descend by price, asks ascend. Lookup, insertion
+point, and removal point all come from one binary search.
+
+**Rejected:** `map[Price]Qty` plus a separately maintained sorted key slice.
+O(1) point updates, but the two structures have to be kept consistent by hand,
+and every read of the top of book still pays for the slice.
+
+**Rejected:** a balanced tree or skip list. Asymptotically better for
+insertion far from the top of book, and worse in practice at this size: a few
+thousand levels of 16 bytes each, scanned linearly by hardware that likes
+contiguous memory, against a pointer chase per comparison.
+
+**Why:** the access pattern is not uniform. The hot read is the top of book
+and the first N levels, which on a sorted slice is a prefix and needs no
+search at all. The hot write clusters near the top of book, where the memmove
+after an insertion is short. The levels that would make insertion expensive
+are deep in the book, where updates are rare.
+
+Both sides ordering top-first, rather than both ascending by price, means the
+same index means the same thing on either side and every read path is written
+once.
+
+**Consequence:** a duplicate price on a side is unreachable through the binary
+search, so it would never be updated or removed again. `Reset` rejects
+duplicate prices in a snapshot rather than storing them, and the invariant is
+asserted directly in the tests.
+
+**Follow-up:** this is the structure M4 profiles. If insertion memmove shows
+up, that is the profile that would motivate revisiting it, per the
+no-optimisation-without-a-profile rule.
+
+---
+
+## D24. A crossed book is reported, not rejected
+
+**Chosen:** `Book.Crossed()` reports whether the best bid is at or above the
+best ask. The book applies the update that produced the cross and stores it.
+
+**Rejected:** having `Apply` return an error when an update would cross the
+book, and leaving the book unchanged. It looks safer and is worse: refusing
+the delta means the book silently diverges from the exchange from that point
+on, which is the exact failure mode this milestone exists to prevent. The
+crossed state is evidence; discarding the evidence does not uncross anything.
+
+**Rejected:** having the book mark itself stale and trigger its own resync. It
+would put network I/O and sequencing policy inside a pure container, and the
+book would then need to know about REST clients, contexts, and retry.
+
+**Why:** a crossed book is never a state an exchange publishes, so it means a
+delta was lost, applied out of sequence, or applied to the wrong side. The
+response is to resync the symbol, which is a decision for the sequencing layer
+(M2.3, M2.4) that has the update ids, the snapshot client, and the buffer. The
+container's job is to make the condition detectable in O(1), which is what
+separates "detectable" from "silently accepted" in the M2.1 done criterion.
+
+**Consequence:** nothing calls `Crossed()` until M2.3. It is checked by tests
+in the meantime, and the correctness harness described under M2 is where it
+becomes an operational signal.
