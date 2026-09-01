@@ -76,12 +76,78 @@ exercised rather than bypassed.
 
 ### M2. Order book
 
-The most delicate component. REST snapshot, delta application, sequence gap
-detection, resync procedure, sharded ownership.
+Split into six steps. This is the milestone where an error is silent: a wrong
+book does not crash, it lies. Each step must be verifiable on its own before
+the next is built on top of it.
 
-Done when: a book tracks live for an extended period without divergence from
-a reference snapshot, and a deliberately dropped delta triggers a resync that
-restores correct state.
+#### M2.1 Book data structure
+
+`internal/book`: the per-symbol book as a pure in-memory structure. Apply a
+level update, remove a level when quantity reaches zero, read top of book,
+read the first N levels per side. No sequencing, no network, no concurrency.
+
+Choose and record the representation: sorted slice with binary search, or map
+plus sorted key slice. Sorted slice is the default choice, since the hot
+operation is reading the top of the book and updates cluster near it.
+
+Done when: unit tests cover insertion, update, removal, and level ordering on
+both sides, including the crossed-book case (best bid at or above best ask),
+which must be detectable rather than silently accepted.
+
+#### M2.2 Snapshot fetch
+
+REST client for `/api/v3/depth` with the maximum depth limit. Parse into the
+structure from M2.1. Handle the documented limitation that levels beyond the
+returned depth are unknown rather than absent.
+
+Done when: a fetched snapshot loads into a book and its top of book matches
+the exchange's own display.
+
+#### M2.3 Sequence tracking
+
+Track the last applied update id per symbol. Classify each incoming delta as
+stale (already applied, discard), contiguous (apply), or gapped (do not
+apply, mark the book stale). No recovery yet, only correct classification.
+
+Done when: a table driven test covers all three classifications, including the
+boundary conditions at the first delta after a snapshot.
+
+#### M2.4 Resync procedure
+
+The full Binance depth resync: buffer deltas from connection, fetch the
+snapshot, discard buffered deltas older than the snapshot id, apply the
+remainder in order, then resume live application. Triggered on startup and on
+any gap detected in M2.3.
+
+Done when: a deliberately dropped delta produces a resync that restores a
+book identical to a freshly fetched snapshot.
+
+#### M2.5 Sharded ownership
+
+`internal/pipeline`: route events by `hash(symbol) % N` to N goroutines, each
+the exclusive owner of its books. No mutex on book state. Shard count is a
+flag defaulting to `runtime.NumCPU()`.
+
+Done when: the race detector is clean under load, and a `goleak` test shows no
+leaked goroutines after shutdown.
+
+#### M2.6 Query path
+
+Add the second channel to the shard loop: snapshot requests carrying a reply
+channel, answered by the owning goroutine between deltas. Nothing calls it
+yet. Requests must respect context cancellation so a caller that gives up
+never blocks the shard.
+
+Done when: a test issues concurrent queries during live updates, the race
+detector stays clean, and no lock has been introduced on book state.
+
+#### Correctness harness
+
+Not a step, but a requirement that spans the milestone: a long-running check
+that periodically fetches a fresh REST snapshot and compares it against the
+locally maintained book, reporting any divergence. This is the only way to
+know the book is right rather than merely plausible, and it should exist by
+M2.4 rather than at the end.
 
 ### M3. Recorder and replayer
 
