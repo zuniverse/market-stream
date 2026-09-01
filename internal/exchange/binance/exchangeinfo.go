@@ -14,7 +14,15 @@ import (
 // InstrumentCache maps raw Binance symbol strings to normalised Instrument values.
 type InstrumentCache struct {
 	m    map[string]model.Instrument
-	norm map[model.Symbol]model.Instrument
+	norm map[model.Symbol]entry
+}
+
+// entry pairs an instrument with the exchange's own symbol string, so that
+// the raw form can be recovered from a normalised symbol without a second
+// map to keep in step.
+type entry struct {
+	raw  string
+	inst model.Instrument
 }
 
 // Lookup returns the Instrument for the given raw Binance symbol (e.g. "BTCUSDT").
@@ -25,8 +33,20 @@ func (c *InstrumentCache) Lookup(rawSymbol string) (model.Instrument, bool) {
 
 // LookupByNormalized returns the Instrument for a normalised symbol (e.g. "BTC-USDT").
 func (c *InstrumentCache) LookupByNormalized(sym model.Symbol) (model.Instrument, bool) {
-	inst, ok := c.norm[sym]
-	return inst, ok
+	e, ok := c.norm[sym]
+	return e.inst, ok
+}
+
+// RawSymbol returns the exchange's own symbol string for a normalised symbol
+// (e.g. "BTCUSDT" for "BTC-USDT"), together with its instrument metadata,
+// which a caller building a REST request needs at the same moment.
+//
+// It reverses the normalisation applied at decode time, and it is what keeps
+// the raw format inside this package: every caller elsewhere holds only
+// BASE-QUOTE symbols (D16).
+func (c *InstrumentCache) RawSymbol(sym model.Symbol) (string, model.Instrument, bool) {
+	e, ok := c.norm[sym]
+	return e.raw, e.inst, ok
 }
 
 // ParseExchangeInfo parses the JSON body of a Binance /api/v3/exchangeInfo
@@ -52,7 +72,7 @@ func ParseExchangeInfo(data []byte) (*InstrumentCache, error) {
 
 	cache := &InstrumentCache{
 		m:    make(map[string]model.Instrument, len(resp.Symbols)),
-		norm: make(map[model.Symbol]model.Instrument, len(resp.Symbols)),
+		norm: make(map[model.Symbol]entry, len(resp.Symbols)),
 	}
 
 	for _, sym := range resp.Symbols {
@@ -91,7 +111,7 @@ func ParseExchangeInfo(data []byte) (*InstrumentCache, error) {
 			QtyDecimals:   qtyDec,
 		}
 		cache.m[sym.Symbol] = inst
-		cache.norm[inst.Symbol] = inst
+		cache.norm[inst.Symbol] = entry{raw: sym.Symbol, inst: inst}
 	}
 
 	return cache, nil

@@ -519,3 +519,51 @@ separates "detectable" from "silently accepted" in the M2.1 done criterion.
 **Consequence:** nothing calls `Crossed()` until M2.3. It is checked by tests
 in the meantime, and the correctness harness described under M2 is where it
 becomes an operational signal.
+
+---
+
+## D25. Depth snapshots are fetched at maximum depth, and truncation is carried explicitly
+
+**Chosen:** `DepthClient` requests `/api/v3/depth` at `limit=5000`, the deepest
+the endpoint serves, by default. The result carries `Snapshot.Truncated`, set
+when either side came back filled exactly to the requested limit. The deepest
+level present on each side is then the boundary of what the snapshot knows.
+
+**Rejected:** a shallow limit such as 100 or 500. It weighs 5 or 25 against
+the per-IP budget instead of 250, which matters when many symbols resync at
+once, and it buys that with a book whose known region ends a few ticks from
+the touch. Depth beyond the cut still receives deltas and still accumulates,
+so a shallow snapshot does not make the book smaller, only less anchored.
+
+**Rejected:** treating a snapshot as the whole book, so that any locally held
+level the snapshot does not mention is deleted. It is the reading that makes
+`Reset` simplest, and it is wrong: those levels are outside the window the
+exchange was asked about, not gone. It would also make the M2.4 correctness
+harness report divergence on every run.
+
+**Rejected:** leaving truncation implicit, on the argument that a caller can
+compare `len(Bids)` against the limit it asked for. That works only where the
+limit travels alongside the snapshot, which is exactly what stops being true
+once a snapshot is handed to a book shard or to the harness.
+
+**Why:** the endpoint's contract is "the top N levels", not "the book", and
+the difference is invisible in the payload: a truncated response and a
+complete one are the same JSON. Absence below the cut means unknown, and the
+only place with enough information to say so is the code that issued the
+request. Recording it there costs one bool and removes a whole class of false
+divergence downstream.
+
+The complementary half is in the book itself (M2.1): removing a level it does
+not hold is a no-op rather than an error, because a delta may legitimately
+delete a price that was below the snapshot cut and was therefore never seen.
+
+**Consequence:** a comparison between a locally maintained book and a fresh
+snapshot must be restricted to the price range the snapshot covers whenever
+`Truncated` is set. That constraint belongs to the harness described under M2,
+and is why the flag exists before anything reads it.
+
+**Weight, for the record:** Binance spot charges request weight by limit tier,
+5 for up to 100 levels and 250 for 5000, against a per-IP budget of 6000 per
+minute. Full-depth snapshots are therefore a bounded resource, and a resync
+storm across many symbols is the case to watch. The `limit` parameter on
+`NewDepthClient` exists so that this can be traded off without a code change.

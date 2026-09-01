@@ -52,6 +52,17 @@ type Snapshot struct {
 	LastID int64
 	Bids   []Level
 	Asks   []Level
+
+	// Truncated reports that the source returned only the top of the book
+	// because it was asked for a bounded number of levels, so this snapshot
+	// is authoritative only down to the last level held on each side. Beyond
+	// that, a price being absent means unknown, not empty: the exchange may
+	// well hold depth there that was never sent.
+	//
+	// A consumer that compares a locally maintained book against a fresh
+	// snapshot must restrict the comparison to the price range the snapshot
+	// covers, or every level below the cut will look like a divergence.
+	Truncated bool
 }
 
 // Event is the canonical pipeline message type.
