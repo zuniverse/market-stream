@@ -401,11 +401,11 @@ func TestApplyAgainstReferenceModel(t *testing.T) {
 	}
 	checkInvariants(t, b)
 
-	compareSide(t, "bid", b.Bids(b.BidDepth()), refBids, true)
-	compareSide(t, "ask", b.Asks(b.AskDepth()), refAsks, false)
+	assertSideMatchesRef(t, "bid", b.Bids(b.BidDepth()), refBids, true)
+	assertSideMatchesRef(t, "ask", b.Asks(b.AskDepth()), refAsks, false)
 }
 
-func compareSide(t *testing.T, name string, got []model.Level, ref map[model.Price]model.Qty, desc bool) {
+func assertSideMatchesRef(t *testing.T, name string, got []model.Level, ref map[model.Price]model.Qty, desc bool) {
 	t.Helper()
 	want := make([]model.Level, 0, len(ref))
 	for p, q := range ref {

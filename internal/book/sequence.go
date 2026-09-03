@@ -106,6 +106,13 @@ func (s *Sequencer) Next(d model.BookDelta) Class {
 	}
 }
 
+// Invalidate marks the sequencer as needing a resync without a gap having
+// been observed. It exists for the case where a delta was classified
+// Contiguous and then failed to reach the book: the position has advanced
+// past an update the book never saw, which is the same hole a lost delta
+// leaves, and only the caller knows it happened.
+func (s *Sequencer) Invalidate() { s.synced = false }
+
 // LastID returns the highest update id applied, or the snapshot id given to
 // Reset if no delta has been applied since. It is zero before the first
 // Reset. After a gap it holds the position the stream was at when the gap was

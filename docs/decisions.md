@@ -625,3 +625,89 @@ book without recording that it was applied. The cost is that a caller whose
 never reached the book. `Apply` only fails on levels that cannot exist, which
 is a decoding fault rather than a sequencing one, and the answer to it is a
 resync.
+
+---
+
+## D27. The tracker runs the resync procedure but does not fetch
+
+**Chosen:** `book.Tracker` holds a book, its sequencer, and the delta buffer,
+and implements every step of the Binance depth resync except the request
+itself. It exposes `BeginFetch` (a snapshot is needed, and none is already on
+its way), `Load` (here is one, re-anchor and replay), and `FetchFailed`. The
+caller performs the HTTP request, wherever and however it likes.
+
+**Rejected:** giving the tracker a snapshot client and letting it fetch when
+it detects a gap. It is the version with the smallest API and the worst
+consequence: the fetch blocks on the network, and the goroutine that owns a
+tracker owns every other book in its shard (D3), so one symbol resyncing would
+stall every symbol beside it. Hiding a network call behind an `Apply` that
+otherwise costs a binary search is exactly the kind of surprise that makes a
+latency profile unreadable.
+
+**Rejected:** giving the tracker its own goroutine and a channel of deltas, so
+it can fetch without blocking anyone. It works, and it puts a goroutine per
+symbol in the process with a lifetime nobody owns, which the goroutine
+ownership rule in `CLAUDE.md` exists to prevent. It also duplicates the shard
+loop that M2.5 is going to build anyway.
+
+**Why:** the split falls where the knowledge is. The tracker knows when a
+snapshot is needed and what to do with one; only the caller knows which client
+to use, what timeout to allow, how to back off on failure, and which goroutine
+can afford to wait. Keeping I/O out also means the whole procedure is tested
+against a fake venue with no network, no `httptest`, and no clock.
+
+**Consequence:** `BeginFetch` and `Load` are a two-call protocol, and a caller
+that starts a fetch and never finishes it leaves the tracker waiting forever.
+`BeginFetch` marking the fetch outstanding as it returns true is what makes
+the failure mode "this symbol stops resyncing" rather than "this symbol issues
+a full-depth request per delta", which at 250 request weight each (D25) would
+exhaust the per-IP budget in seconds.
+
+**Consequence:** startup and recovery are one path. A new tracker holds no
+anchor, so it is in the same state as one that just detected a gap, and the
+first `BeginFetch` returns true for the same reason. There is no separate
+first-snapshot case anywhere in the package.
+
+---
+
+## D28. Divergence is checked over the range both books claim to know
+
+**Chosen:** `Tracker.Compare` takes a freshly fetched snapshot and returns
+every price at which it and the maintained book disagree, together with the
+update ids of both. The comparison is bounded at the deep end by whichever of
+the two is shallower: the edge of the snapshot that seeded the book, and the
+edge of the snapshot being compared, each applying only when that snapshot was
+truncated.
+
+**Rejected:** comparing the two books in full. Every level below either edge
+would be reported, since absence past the cut means unknown rather than empty
+(D25), and a check that reports thousands of false divergences on every run is
+one that gets switched off in a week.
+
+**Rejected:** comparing only the top N levels, with N a constant. It has no
+false positives and it looks at the part of the book that a bug is least
+likely to survive in: near the touch, an error is corrected by the next few
+updates, while a level ten thousand ticks down can hold a wrong quantity for
+hours. The bounded-range comparison covers the same top of book and keeps the
+depth where a stale error actually persists.
+
+**Rejected:** having Compare fetch the snapshot itself, and having it decide
+when to run. Same reasoning as D27, plus one more: a full-depth request costs
+250 weight, so how often to check is a budget decision for the operator rather
+than a constant inside a comparison function.
+
+**Why:** the milestone's premise is that a wrong book does not crash, it lies.
+The only external truth available is a fresh snapshot, so the comparison
+against one is the whole of the evidence, and it is worth being precise about
+which part of it is admissible.
+
+`IDSkew` is reported rather than corrected. The snapshot is fetched while the
+stream keeps running, so the two describe the same book a few updates apart
+and a difference near the touch is expected. A divergence at a skew of zero,
+or one deep in the book where nothing has traded, is not. Making the skew
+visible is what lets a reader tell those apart; pretending to a comparison at
+a single instant would not.
+
+**Not built:** the loop that runs the check periodically. It needs a goroutine
+with an owner and a way to read a book it does not own, which is M2.5 and
+M2.6. Compare is the part that has to be right, and it is testable now.
