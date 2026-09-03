@@ -151,12 +151,57 @@ M2.4 rather than at the end.
 
 ### M3. Recorder and replayer
 
-`Source` interface with live and replay implementations. Raw frame recording
-with receive timestamps. Correctness test: replay a file and compare resulting
-book state against a reference snapshot.
+Split into four steps. Smaller than M2, but it combines a file format, an
+abstraction, and a correctness harness, which are three separate concerns.
 
-Done when: `cmd/replay` produces byte-identical book state across two runs of
-the same input file.
+#### M3.1 Frame format and writer
+
+Define the on-disk format for raw frames: length prefix, receive timestamp,
+payload, per D6. Hourly files, zstd compressed, named so that ordering is
+lexicographic. Write a `Recorder` that consumes raw frames and writes them,
+with buffering so writes never block the transport stage.
+
+Recording is a subscriber concern, not a transport concern: it must not sit on
+the lossless path.
+
+Done when: a recording session produces readable files, and killing the
+process mid-write leaves a file that the reader can still consume up to the
+last complete frame.
+
+#### M3.2 Reader and `Source` interface
+
+Define `Source` as the pipeline entry point, with `LiveSource` wrapping the
+existing transport and `ReplaySource` reading recorded files. Everything
+downstream must compile unchanged against either.
+
+Replay honours original inter-frame timing at x1, and supports a speed
+multiplier including "as fast as possible". Record the limitation from the
+architecture document: accelerated replay flattens burst structure, so it
+measures throughput and saturation, not realistic load shape.
+
+Done when: `cmd/replay` runs a recorded file through the full pipeline and
+produces the same log output as the live run did.
+
+#### M3.3 Determinism
+
+Replay of the same file must produce identical final book state across runs.
+This requires eliminating nondeterminism from the replay path: no wall-clock
+dependence in book logic, no map iteration order affecting output, and a
+fixed shard count so symbol routing is stable.
+
+Done when: two runs over the same input produce byte-identical book state
+dumps, verified by a test rather than by hand.
+
+#### M3.4 Correctness fixtures
+
+Promote the harness from M2 into a repeatable test: a committed short
+recording, plus a reference snapshot captured at a known point in it, with a
+test that replays and asserts the book matches. Keep the recording small
+enough to live in the repository, and note in the README where a larger
+corpus can be regenerated.
+
+Done when: `go test ./...` verifies book correctness against real captured
+data, with no network access.
 
 ### M4. Measurement baseline
 
