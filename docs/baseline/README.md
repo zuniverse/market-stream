@@ -51,6 +51,14 @@ go tool pprof -http=: docs/baseline/cpu.pprof
 
 ## `bench.txt`
 
-`go test -bench` output over the whole module, in the format `benchstat`
+`go test -run xxx -bench . -count=6 ./internal/...`, in the format `benchstat`
 reads. An optimisation is justified by a profile and quantified by a
-`benchstat` comparison against this file.
+`benchstat` comparison against this file:
+
+```sh
+go test -run xxx -bench . -count=6 ./internal/... > after.txt
+benchstat docs/baseline/bench.txt after.txt
+```
+
+Six runs rather than one, because a single measurement has no variance to
+report and `benchstat` will not tell you whether a change is a change.

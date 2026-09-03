@@ -492,6 +492,9 @@ asserted directly in the tests.
 up, that is the profile that would motivate revisiting it, per the
 no-optimisation-without-a-profile rule.
 
+**Correction, M4:** it showed up, and one clause of the reasoning above is
+wrong. See D41.
+
 ---
 
 ## D24. A crossed book is reported, not rejected
@@ -1175,3 +1178,78 @@ recorded nothing. It took running the binary against the real venue, which is
 the same lesson D22 records about hand-written fixtures, arriving from the
 other direction: a fixture that is smaller than reality hides a size limit as
 surely as one shaped to the code hides a format error.
+
+---
+
+## D40. The baseline is committed artefacts, not a paragraph of adjectives
+
+**Chosen:** M4 commits the recording it measured, the CPU and heap profiles,
+and six runs of every benchmark in `benchstat` format, under
+`docs/baseline/`, with the reading of them in `docs/baseline.md`.
+
+**Rejected:** documenting the conclusions and describing how to reproduce the
+measurements. It is smaller in the repository and it makes every later
+comparison an argument about whether the two runs were comparable. The
+recording is the larger part of the cost at 1.1 MB, and it is the part that
+cannot be reconstructed: recapturing produces different ids, different prices
+and a different number of frames, so a baseline without its input is a set of
+numbers nobody can check.
+
+**Chosen:** `cmd/replay -repeat N` runs the whole replay N times, each with a
+fresh pipeline over the same file.
+
+**Rejected:** profiling a single pass. One pass over the reference takes half
+a second, and a CPU profile of half a second is fifty samples. **Rejected:**
+looping the source without rebuilding the pipeline, which would replay ids the
+books have already applied, so every repeat after the first would measure the
+stale path rather than the real one.
+
+The repeat also checks reproducibility for free: `run` compares the book state
+each repeat produced and refuses to continue if two differ, so every
+profiling run is also a determinism run.
+
+**Chosen:** the replay harness is named and quantified rather than excluded.
+Reading the recording is 16.8% of the profile, because a replay reads the file
+twice by design (D38). Filtering it out of the profile would produce a
+cleaner picture of a program that does not exist; naming it lets a reader
+subtract it and see that the same 16.8% is what a self-contained recording
+costs.
+
+**Consequence:** the numbers belong to one machine, an i7-7700HQ with 8
+threads. The proportions are what M5 argues from, and a `benchstat`
+comparison is run on whatever machine is doing the comparing, against a fresh
+baseline taken there if it is not this one.
+
+---
+
+## D41. The memmove argument in D23 was backwards
+
+**What D23 said:** a sorted slice suits the access pattern partly because
+"the hot write clusters near the top of book, where the memmove after an
+insertion is short".
+
+**What the profile and the benchmark say:** a slice insertion shifts
+everything *after* the index, so a write at the touch moves the whole side
+and a write deep in the book moves almost nothing. On a real 5000-level book,
+deleting and re-inserting one level costs 2.513 µs at the touch, 2.478 µs
+twenty levels down, and 535.1 ns four thousand levels down. The clause has it
+exactly the wrong way round, and slice shifting is 10.2% of the whole
+profile.
+
+**What still stands:** everything else in D23. Reads of the top of book are a
+slice prefix and need no search, the structure is contiguous and the hardware
+likes that, and the alternatives lose for the reasons recorded there. The
+in-place update, which is the commonest delta and moves no memory, is about
+90 ns wherever it lands.
+
+**What does not follow:** that the structure should change. This entry
+records that a stated reason was wrong, which is a different thing from the
+conclusion being wrong, and the rule against optimising without a measured
+comparison applies to reversing a decision as much as to making one. D23 is
+not superseded. It is annotated, and the item is third on the list in
+`docs/baseline.md` because the two decoder items above it are larger.
+
+**Why record it at all:** the point of writing rejected alternatives down is
+that a later session does not re-propose them. That only works if the reasons
+are true. A wrong reason left in place is worse than no reason: it makes the
+wrong thing look already settled.

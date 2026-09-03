@@ -1,0 +1,182 @@
+?   	github.com/zuniverse/market-stream/internal/aggregate	[no test files]
+goos: linux
+goarch: amd64
+pkg: github.com/zuniverse/market-stream/internal/book
+cpu: Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz
+BenchmarkReset-8                   	    9158	    140815 ns/op	  163840 B/op	       2 allocs/op
+BenchmarkReset-8                   	    8169	    138121 ns/op	  163841 B/op	       2 allocs/op
+BenchmarkReset-8                   	    8683	    141510 ns/op	  163840 B/op	       2 allocs/op
+BenchmarkReset-8                   	    8788	    135992 ns/op	  163840 B/op	       2 allocs/op
+BenchmarkReset-8                   	    9742	    126482 ns/op	  163840 B/op	       2 allocs/op
+BenchmarkReset-8                   	    9118	    118452 ns/op	  163840 B/op	       2 allocs/op
+BenchmarkUpdateTopOfBook-8         	11861956	       100.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateTopOfBook-8         	13759740	        93.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateTopOfBook-8         	13559223	        92.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateTopOfBook-8         	13534953	        90.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateTopOfBook-8         	12836746	        90.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateTopOfBook-8         	13570617	        90.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateNearTouch-8         	12090898	        98.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateNearTouch-8         	12248881	       103.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateNearTouch-8         	10500326	       102.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateNearTouch-8         	12574333	       103.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateNearTouch-8         	11603654	       105.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateNearTouch-8         	10827904	        97.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateDeep-8              	12710278	        88.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateDeep-8              	12546826	        86.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateDeep-8              	12667172	        89.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateDeep-8              	14127661	        96.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateDeep-8              	13482745	        89.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUpdateDeep-8              	12919963	        88.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertTopOfBook-8   	  503067	      2447 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertTopOfBook-8   	  505677	      2516 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertTopOfBook-8   	  483325	      2748 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertTopOfBook-8   	  504502	      2525 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertTopOfBook-8   	  500173	      2510 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertTopOfBook-8   	  460189	      2485 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertNearTouch-8   	  515324	      2566 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertNearTouch-8   	  497065	      2475 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertNearTouch-8   	  459806	      2489 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertNearTouch-8   	  479622	      2481 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertNearTouch-8   	  513258	      2444 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertNearTouch-8   	  493386	      2451 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertDeep-8        	 2228332	       537.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertDeep-8        	 2151247	       532.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertDeep-8        	 2297780	       547.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertDeep-8        	 2290018	       514.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertDeep-8        	 2194077	       519.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeleteInsertDeep-8        	 2224418	       542.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBids20-8                  	14466610	        86.03 ns/op	     320 B/op	       1 allocs/op
+BenchmarkBids20-8                  	13749481	        83.18 ns/op	     320 B/op	       1 allocs/op
+BenchmarkBids20-8                  	14014882	        83.12 ns/op	     320 B/op	       1 allocs/op
+BenchmarkBids20-8                  	14051881	        83.41 ns/op	     320 B/op	       1 allocs/op
+BenchmarkBids20-8                  	14090380	        83.78 ns/op	     320 B/op	       1 allocs/op
+BenchmarkBids20-8                  	14024479	        84.43 ns/op	     320 B/op	       1 allocs/op
+BenchmarkBestBid-8                 	1000000000	         0.6297 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBestBid-8                 	1000000000	         0.6258 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBestBid-8                 	1000000000	         0.6273 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBestBid-8                 	1000000000	         0.6317 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBestBid-8                 	1000000000	         0.6260 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBestBid-8                 	1000000000	         0.6256 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCrossed-8                 	1000000000	         0.3157 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCrossed-8                 	1000000000	         0.3225 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCrossed-8                 	1000000000	         0.3181 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCrossed-8                 	1000000000	         0.3127 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCrossed-8                 	1000000000	         0.3132 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCrossed-8                 	1000000000	         0.3180 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSequencerNext-8           	160562734	         7.470 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSequencerNext-8           	160354526	         7.457 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSequencerNext-8           	160366586	         7.483 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSequencerNext-8           	160250308	         7.444 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSequencerNext-8           	161275915	         7.456 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSequencerNext-8           	161634592	         7.472 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/zuniverse/market-stream/internal/book	89.768s
+goos: linux
+goarch: amd64
+pkg: github.com/zuniverse/market-stream/internal/exchange/binance
+cpu: Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz
+BenchmarkDecodeMixed-8         	   50709	     24770 ns/op	  24.91 MB/s	    3431 B/op	      54 allocs/op
+BenchmarkDecodeMixed-8         	   50295	     24349 ns/op	  25.34 MB/s	    3434 B/op	      54 allocs/op
+BenchmarkDecodeMixed-8         	   46092	     25101 ns/op	  24.58 MB/s	    3427 B/op	      54 allocs/op
+BenchmarkDecodeMixed-8         	   45042	     23850 ns/op	  25.87 MB/s	    3422 B/op	      54 allocs/op
+BenchmarkDecodeMixed-8         	   50305	     25469 ns/op	  24.23 MB/s	    3434 B/op	      54 allocs/op
+BenchmarkDecodeMixed-8         	   47325	     23839 ns/op	  25.88 MB/s	    3424 B/op	      54 allocs/op
+BenchmarkDecodeAggTrade-8      	  135520	      8306 ns/op	  24.44 MB/s	    1032 B/op	      21 allocs/op
+BenchmarkDecodeAggTrade-8      	  128439	      8461 ns/op	  23.99 MB/s	    1032 B/op	      21 allocs/op
+BenchmarkDecodeAggTrade-8      	  133718	      8855 ns/op	  22.92 MB/s	    1032 B/op	      21 allocs/op
+BenchmarkDecodeAggTrade-8      	  148609	      8394 ns/op	  24.18 MB/s	    1032 B/op	      21 allocs/op
+BenchmarkDecodeAggTrade-8      	  145652	      8521 ns/op	  23.82 MB/s	    1032 B/op	      21 allocs/op
+BenchmarkDecodeAggTrade-8      	  151916	      8565 ns/op	  23.70 MB/s	    1032 B/op	      21 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   26307	     45821 ns/op	  26.28 MB/s	    6835 B/op	     101 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   26229	     45416 ns/op	  26.51 MB/s	    6839 B/op	     101 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   26876	     48323 ns/op	  24.92 MB/s	    6880 B/op	     102 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   25134	     47187 ns/op	  25.52 MB/s	    6840 B/op	     101 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   24998	     46518 ns/op	  25.88 MB/s	    6855 B/op	     102 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   26552	     45714 ns/op	  26.34 MB/s	    6861 B/op	     102 allocs/op
+BenchmarkParseDepth-8          	   42894	     28085 ns/op	  47.21 MB/s	    6536 B/op	     101 allocs/op
+BenchmarkParseDepth-8          	   41972	     28496 ns/op	  46.53 MB/s	    6536 B/op	     101 allocs/op
+BenchmarkParseDepth-8          	   42193	     28648 ns/op	  46.29 MB/s	    6536 B/op	     101 allocs/op
+BenchmarkParseDepth-8          	   41200	     27890 ns/op	  47.54 MB/s	    6536 B/op	     101 allocs/op
+BenchmarkParseDepth-8          	   42324	     28514 ns/op	  46.50 MB/s	    6536 B/op	     101 allocs/op
+BenchmarkParseDepth-8          	   35689	     30681 ns/op	  43.22 MB/s	    6536 B/op	     101 allocs/op
+PASS
+ok  	github.com/zuniverse/market-stream/internal/exchange/binance	49.168s
+goos: linux
+goarch: amd64
+pkg: github.com/zuniverse/market-stream/internal/model
+cpu: Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz
+BenchmarkParsePrice-8     	26250696	        49.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParsePrice-8     	24931338	        48.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParsePrice-8     	24860428	        50.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParsePrice-8     	26163679	        50.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParsePrice-8     	26091855	        48.94 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParsePrice-8     	24919660	        48.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQty-8       	24670957	        46.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQty-8       	27879771	        47.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQty-8       	26821185	        44.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQty-8       	28115990	        46.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQty-8       	28349578	        44.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQty-8       	23990497	        49.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQtyZero-8   	26887770	        47.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQtyZero-8   	26922426	        45.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQtyZero-8   	26188978	        45.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQtyZero-8   	23816653	        44.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQtyZero-8   	27999592	        43.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseQtyZero-8   	26215513	        45.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFormatFixed-8    	16375172	        73.57 ns/op	      24 B/op	       2 allocs/op
+BenchmarkFormatFixed-8    	16170853	        73.68 ns/op	      24 B/op	       2 allocs/op
+BenchmarkFormatFixed-8    	15638146	        74.38 ns/op	      24 B/op	       2 allocs/op
+BenchmarkFormatFixed-8    	16133568	        73.09 ns/op	      24 B/op	       2 allocs/op
+BenchmarkFormatFixed-8    	15592810	        71.85 ns/op	      24 B/op	       2 allocs/op
+BenchmarkFormatFixed-8    	15309082	        74.26 ns/op	      24 B/op	       2 allocs/op
+PASS
+ok  	github.com/zuniverse/market-stream/internal/model	30.488s
+goos: linux
+goarch: amd64
+pkg: github.com/zuniverse/market-stream/internal/pipeline
+cpu: Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz
+BenchmarkRouteApplyTopOfBook-8   	 2337536	       493.5 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyTopOfBook-8   	 2439080	       528.3 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyTopOfBook-8   	 2413032	       520.7 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyTopOfBook-8   	 2380773	       521.4 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyTopOfBook-8   	 2347458	       498.5 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyTopOfBook-8   	 2298500	       516.3 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyDeep-8        	 2505103	       509.5 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyDeep-8        	 2343808	       488.3 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyDeep-8        	 2325711	       499.7 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyDeep-8        	 2406078	       474.7 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyDeep-8        	 2406115	       509.1 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyDeep-8        	 2353825	       488.0 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyShards4-8     	 2456970	       490.2 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyShards4-8     	 2382208	       507.6 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyShards4-8     	 2331158	       502.0 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyShards4-8     	 2353994	       513.6 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyShards4-8     	 2265512	       531.7 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRouteApplyShards4-8     	 2366563	       493.4 ns/op	      16 B/op	       1 allocs/op
+BenchmarkQuery-8                 	  809492	      1508 ns/op	    1040 B/op	       4 allocs/op
+BenchmarkQuery-8                 	  707506	      1491 ns/op	    1040 B/op	       4 allocs/op
+BenchmarkQuery-8                 	  803820	      1493 ns/op	    1040 B/op	       4 allocs/op
+BenchmarkQuery-8                 	  811590	      1465 ns/op	    1040 B/op	       4 allocs/op
+BenchmarkQuery-8                 	  809918	      1467 ns/op	    1040 B/op	       4 allocs/op
+BenchmarkQuery-8                 	  817978	      1493 ns/op	    1040 B/op	       4 allocs/op
+BenchmarkPublish-8               	 7531504	       144.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPublish-8               	 8332910	       144.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPublish-8               	 8365914	       151.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPublish-8               	 7716786	       144.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPublish-8               	 8137812	       143.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPublish-8               	 8055782	       144.8 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/zuniverse/market-stream/internal/pipeline	52.107s
+goos: linux
+goarch: amd64
+pkg: github.com/zuniverse/market-stream/internal/record
+cpu: Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz
+BenchmarkReadReference-8   	      26	  49105099 ns/op	  23.53 MB/s	      8769 records/file	19868026 B/op	   17734 allocs/op
+BenchmarkReadReference-8   	      24	  50216017 ns/op	  23.01 MB/s	      8769 records/file	19868571 B/op	   17734 allocs/op
+BenchmarkReadReference-8   	      26	  47766845 ns/op	  24.19 MB/s	      8769 records/file	19869192 B/op	   17734 allocs/op
+BenchmarkReadReference-8   	      22	  48817773 ns/op	  23.67 MB/s	      8769 records/file	19867634 B/op	   17734 allocs/op
+BenchmarkReadReference-8   	      22	  48677748 ns/op	  23.74 MB/s	      8769 records/file	19867602 B/op	   17733 allocs/op
+BenchmarkReadReference-8   	      24	  49241750 ns/op	  23.47 MB/s	      8769 records/file	19867725 B/op	   17734 allocs/op
+PASS
+ok  	github.com/zuniverse/market-stream/internal/record	7.354s
+?   	github.com/zuniverse/market-stream/internal/sink	[no test files]

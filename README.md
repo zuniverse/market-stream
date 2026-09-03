@@ -18,9 +18,8 @@ profiling under sustained load.
   replay with no network
 - Exposes Prometheus metrics on `/metrics`
 
-Not built yet: the measurement baseline and its profiles (M4), the
-optimisation pass (M5), latency histograms (M6), and everything in the
-backlog.
+Not built yet: the optimisation pass (M5), latency histograms (M6), and
+everything in the backlog.
 
 ## Design notes
 
@@ -30,7 +29,14 @@ locks on book state. Every channel is bounded with an explicit overflow policy.
 
 See [docs/architecture.md](docs/architecture.md) for the full pipeline design
 and [docs/decisions.md](docs/decisions.md) for every design decision and its
-rejected alternatives.
+rejected alternatives. [docs/baseline.md](docs/baseline.md) is where the
+performance claims are, with the profiles they came from committed beside
+them.
+
+Measured on the committed reference recording: about 18,000 frames per second
+end to end, of which roughly two thirds is `encoding/json` decoding. Nothing
+has been optimised yet, deliberately: the baseline exists so that the first
+optimisation can be shown to be one.
 
 ## Usage
 

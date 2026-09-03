@@ -93,8 +93,8 @@ func buildRecording(t *testing.T) string {
 	return names[0]
 }
 
-// replayOnce runs the whole binary over the recording and returns the dump.
-func replayOnce(t *testing.T, file string, shards int) string {
+// runReplay runs the whole binary over the recording and returns the dump.
+func runReplay(t *testing.T, file string, shards int) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "dump.txt")
 	cfg := config{files: []string{file}, out: out, speed: 0, shards: shards, quiet: true}
@@ -113,8 +113,8 @@ func replayOnce(t *testing.T, file string, shards int) string {
 func TestReplayIsReproducible(t *testing.T) {
 	file := buildRecording(t)
 
-	first := replayOnce(t, file, 4)
-	second := replayOnce(t, file, 4)
+	first := runReplay(t, file, 4)
+	second := runReplay(t, file, 4)
 	if first != second {
 		t.Errorf("two replays of one recording differ:\n--- first ---\n%s\n--- second ---\n%s",
 			head(first), head(second))
@@ -147,7 +147,7 @@ func TestReplayIsReproducible(t *testing.T) {
 // eight must leave the same books.
 func TestReplayIsIndependentOfShardCount(t *testing.T) {
 	file := buildRecording(t)
-	if one, eight := replayOnce(t, file, 1), replayOnce(t, file, 8); one != eight {
+	if one, eight := runReplay(t, file, 1), runReplay(t, file, 8); one != eight {
 		t.Errorf("shard count changed the result:\n--- 1 shard ---\n%s\n--- 8 shards ---\n%s",
 			head(one), head(eight))
 	}
@@ -192,4 +192,49 @@ func head(s string) string {
 		lines = append(lines[:12], "...")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// TestReplayRepeatAndProfiles covers the profiling harness: repeating the
+// replay must produce the same books every time, which run asserts for
+// itself, and the profile files must actually be written.
+func TestReplayRepeatAndProfiles(t *testing.T) {
+	file := buildRecording(t)
+	dir := t.TempDir()
+	cfg := config{
+		files:      []string{file},
+		out:        filepath.Join(dir, "dump.txt"),
+		shards:     2,
+		repeat:     3,
+		cpuProfile: filepath.Join(dir, "cpu.pprof"),
+		memProfile: filepath.Join(dir, "heap.pprof"),
+		quiet:      true,
+	}
+	if err := run(context.Background(), cfg, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	for _, name := range []string{"dump.txt", "cpu.pprof", "heap.pprof"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("%s is empty", name)
+		}
+	}
+
+	// The dump from a repeated run must match a single run's.
+	if got, want := readFileString(t, cfg.out), runReplay(t, file, 2); got != want {
+		t.Error("repeating the replay changed the result")
+	}
+}
+
+func readFileString(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(b)
 }

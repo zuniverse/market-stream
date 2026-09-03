@@ -224,6 +224,8 @@ No optimisation at this stage: record what dominates before acting on it.
 
 Done when: a committed baseline exists and the dominant cost is documented.
 
+Written up in `docs/baseline.md`, with the artefacts in `docs/baseline/`.
+
 ### M5. Optimisation pass
 
 Act on what the profile identified, most likely allocation rate in decoding.

@@ -11,7 +11,7 @@ import (
 	"github.com/zuniverse/market-stream/internal/model"
 )
 
-func fixture(t *testing.T, name string) []byte {
+func fixture(t testing.TB, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile("testdata/" + name)
 	if err != nil {

@@ -8,7 +8,7 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"syscall"
 	"time"
@@ -40,12 +41,15 @@ const (
 )
 
 type config struct {
-	files  []string
-	out    string
-	speed  float64
-	shards int
-	depth  int
-	quiet  bool
+	files      []string
+	out        string
+	speed      float64
+	shards     int
+	depth      int
+	repeat     int
+	cpuProfile string
+	memProfile string
+	quiet      bool
 }
 
 func main() {
@@ -54,6 +58,9 @@ func main() {
 	flag.Float64Var(&cfg.speed, "speed", 0, "replay speed multiplier; 0 replays as fast as possible")
 	flag.IntVar(&cfg.shards, "shards", runtime.NumCPU(), "number of book shard goroutines")
 	flag.IntVar(&cfg.depth, "depth", 0, "levels per side in the dump; 0 dumps the whole book")
+	flag.IntVar(&cfg.repeat, "repeat", 1, "replay the recording this many times, each with a fresh pipeline")
+	flag.StringVar(&cfg.cpuProfile, "cpuprofile", "", "write a CPU profile here")
+	flag.StringVar(&cfg.memProfile, "memprofile", "", "write a heap profile here")
 	flag.BoolVar(&cfg.quiet, "quiet", false, "suppress the progress log")
 	flag.Parse()
 	cfg.files = flag.Args()
@@ -78,10 +85,54 @@ func run(ctx context.Context, cfg config, logTo io.Writer) error {
 	}
 	logger := slog.New(slog.NewTextHandler(logTo, &slog.HandlerOptions{Level: level}))
 
+	repeats := max(cfg.repeat, 1)
+	if cfg.cpuProfile != "" {
+		f, err := os.Create(cfg.cpuProfile)
+		if err != nil {
+			return fmt.Errorf("replay: cpu profile: %w", err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			return fmt.Errorf("replay: cpu profile: %w", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
+	// Each repeat builds a fresh pipeline over the same file, so the work is
+	// identical every time rather than a second pass over books that are
+	// already current. It is what makes a run long enough to sample, and it
+	// checks reproducibility for free: two repeats that dumped different
+	// books would mean the replay is not deterministic after all.
+	var first []byte
+	for i := range repeats {
+		var heap func()
+		if cfg.memProfile != "" && i == repeats-1 {
+			// Taken while the books are still alive, so the profile shows
+			// what the pipeline holds and not just what it allocated.
+			heap = func() { writeHeapProfile(cfg.memProfile, logger) }
+		}
+		views, err := replayOnce(ctx, cfg, logger, heap)
+		if err != nil {
+			return err
+		}
+		dump := renderDump(views)
+		switch {
+		case i == 0:
+			first = dump
+		case !bytes.Equal(first, dump):
+			return fmt.Errorf("replay: repeat %d produced different book state from the first", i)
+		}
+	}
+	return writeDump(cfg.out, first)
+}
+
+// replayOnce runs the recording through one pipeline and returns the books.
+// beforeClose, when set, is called while the books are still live.
+func replayOnce(ctx context.Context, cfg config, logger *slog.Logger, beforeClose func()) ([]pipeline.BookView, error) {
 	frames := make(chan model.Frame, frameCap)
 	src, err := record.NewReplaySource(cfg.files, frames, cfg.speed)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// The metadata comes out of the recording, not off the network. A replay
@@ -89,7 +140,7 @@ func run(ctx context.Context, cfg config, logTo io.Writer) error {
 	// archive (D35).
 	cache, err := binance.ParseExchangeInfo(src.Meta())
 	if err != nil {
-		return fmt.Errorf("replay: instrument metadata: %w", err)
+		return nil, fmt.Errorf("replay: instrument metadata: %w", err)
 	}
 	dec := binance.NewDecoder(cache)
 
@@ -100,10 +151,10 @@ func run(ctx context.Context, cfg config, logTo io.Writer) error {
 		Log:       logger,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := router.Start(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	defer router.Close()
 
@@ -145,7 +196,7 @@ func run(ctx context.Context, cfg config, logTo io.Writer) error {
 		}
 	}()
 	if srcErr != nil {
-		return srcErr
+		return nil, srcErr
 	}
 
 	settled := waitSettled(ctx, router, symbols)
@@ -161,9 +212,27 @@ func run(ctx context.Context, cfg config, logTo io.Writer) error {
 
 	views, err := dumpViews(ctx, router, symbols, cfg.depth)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return writeDump(cfg.out, views)
+	if beforeClose != nil {
+		beforeClose()
+	}
+	return views, nil
+}
+
+// writeHeapProfile writes a heap profile after a garbage collection, so that
+// what it reports as live really is.
+func writeHeapProfile(path string, logger *slog.Logger) {
+	f, err := os.Create(path)
+	if err != nil {
+		logger.Error("heap profile", "err", err.Error())
+		return
+	}
+	defer f.Close()
+	runtime.GC()
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		logger.Error("heap profile", "err", err.Error())
+	}
 }
 
 // handle decodes one frame and hands it to the book stage.
@@ -264,30 +333,29 @@ func dumpViews(ctx context.Context, router *pipeline.Router, symbols map[model.S
 // byte for byte. Nothing about the machine, the clock or the shard count
 // appears in it: a book is its symbol, its position in the stream, and its
 // levels.
-func writeDump(path string, views []pipeline.BookView) error {
-	var w io.Writer = os.Stdout
-	if path != "-" {
-		f, err := os.Create(path)
-		if err != nil {
-			return fmt.Errorf("replay: %w", err)
-		}
-		defer f.Close()
-		w = f
-	}
-	bw := bufio.NewWriter(w)
-
-	fmt.Fprintf(bw, "market-stream replay dump v1\n")
+func renderDump(views []pipeline.BookView) []byte {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "market-stream replay dump v1\n")
 	for _, v := range views {
-		fmt.Fprintf(bw, "symbol %s live=%t last_id=%d crossed=%t bids=%d asks=%d\n",
+		fmt.Fprintf(&buf, "symbol %s live=%t last_id=%d crossed=%t bids=%d asks=%d\n",
 			v.Symbol, v.Live, v.LastID, v.Crossed, v.BidDepth, v.AskDepth)
 		for _, l := range v.Bids {
-			fmt.Fprintf(bw, "B %d %d\n", l.Price, l.Qty)
+			fmt.Fprintf(&buf, "B %d %d\n", l.Price, l.Qty)
 		}
 		for _, l := range v.Asks {
-			fmt.Fprintf(bw, "A %d %d\n", l.Price, l.Qty)
+			fmt.Fprintf(&buf, "A %d %d\n", l.Price, l.Qty)
 		}
 	}
-	if err := bw.Flush(); err != nil {
+	return buf.Bytes()
+}
+
+// writeDump writes the rendered state to path, or to stdout for "-".
+func writeDump(path string, dump []byte) error {
+	if path == "-" {
+		_, err := os.Stdout.Write(dump)
+		return err
+	}
+	if err := os.WriteFile(path, dump, 0o644); err != nil {
 		return fmt.Errorf("replay: write dump: %w", err)
 	}
 	return nil

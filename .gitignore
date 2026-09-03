@@ -17,6 +17,13 @@
 *.bench
 benchstat*.txt
 
+# The M4 baseline artefacts are committed on purpose, against the three rules
+# above. A measurement nobody else can rerun is not evidence, and the
+# recording cannot be reconstructed: recapturing gives different ids, prices
+# and frame counts (D40). Nothing else in the tree is exempt.
+!docs/baseline/*.zst
+!docs/baseline/*.pprof
+
 # Editor
 .idea/
 .vscode/
