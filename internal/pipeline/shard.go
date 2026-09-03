@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zuniverse/market-stream/internal/book"
+	"github.com/zuniverse/market-stream/internal/metrics"
 	"github.com/zuniverse/market-stream/internal/model"
 )
 
@@ -57,6 +58,18 @@ type RouterConfig struct {
 	// Log receives one line per event that a book could not absorb. Nil
 	// discards them.
 	Log *slog.Logger
+
+	// TickToBook, when set, receives the age of every delta at the moment it
+	// reaches a book: the venue's event time to now. It is the primary health
+	// indicator in architecture.md, and it is optional because it is only
+	// meaningful on a live run. A replay would measure the distance from a
+	// recorded timestamp to the present, which is a fact about when the
+	// recording was made (D43).
+	TickToBook *metrics.Histogram
+
+	// Resync, when set, receives how long each resync took, from the moment a
+	// book asked for a snapshot to the moment one anchored it.
+	Resync *metrics.Histogram
 }
 
 // Stats counts what the shards have done since Start. The values are read
@@ -126,17 +139,20 @@ func NewRouter(cfg RouterConfig) (*Router, error) {
 	r := &Router{shards: make([]*shard, n), log: log}
 	for i := range r.shards {
 		r.shards[i] = &shard{
-			id:        i,
-			in:        make(chan model.Event, cfg.QueueCap),
-			results:   make(chan fetchResult),
-			queries:   make(chan query),
-			quit:      make(chan struct{}),
-			books:     make(map[model.Symbol]*book.Tracker),
-			bufferCap: cfg.BufferCap,
-			snapshots: cfg.Snapshots,
-			retry:     delay,
-			log:       log,
-			wg:        &r.wg,
+			tickToBook: cfg.TickToBook,
+			resync:     cfg.Resync,
+			fetchedAt:  make(map[model.Symbol]time.Time),
+			id:         i,
+			in:         make(chan model.Event, cfg.QueueCap),
+			results:    make(chan fetchResult),
+			queries:    make(chan query),
+			quit:       make(chan struct{}),
+			books:      make(map[model.Symbol]*book.Tracker),
+			bufferCap:  cfg.BufferCap,
+			snapshots:  cfg.Snapshots,
+			retry:      delay,
+			log:        log,
+			wg:         &r.wg,
 		}
 	}
 	return r, nil
@@ -305,6 +321,15 @@ type shard struct {
 
 	books     map[model.Symbol]*book.Tracker
 	bufferCap int
+
+	// tickToBook and resync are shared across shards and are safe for
+	// concurrent use; nil means the measurement is not being taken.
+	tickToBook *metrics.Histogram
+	resync     *metrics.Histogram
+
+	// fetchedAt records when each symbol's outstanding snapshot request
+	// started, so a resync can be timed. Owned by this goroutine.
+	fetchedAt map[model.Symbol]time.Time
 	snapshots Snapshotter
 	retry     time.Duration
 
@@ -368,6 +393,9 @@ func (s *shard) handle(ctx context.Context, ev model.Event) {
 		switch st {
 		case book.StatusApplied:
 			s.applied.Add(1)
+			if s.tickToBook != nil && ev.ExchangeTime != 0 {
+				s.tickToBook.Observe(time.Since(time.Unix(0, ev.ExchangeTime)))
+			}
 		case book.StatusDiscarded:
 			s.discarded.Add(1)
 		case book.StatusBuffered:
@@ -417,6 +445,9 @@ func (s *shard) fetch(ctx context.Context, t *book.Tracker) {
 		return
 	}
 	sym := t.Symbol()
+	if _, timing := s.fetchedAt[sym]; !timing {
+		s.fetchedAt[sym] = time.Now()
+	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -473,6 +504,12 @@ func (s *shard) load(ctx context.Context, t *book.Tracker, snap model.Snapshot) 
 			slog.String("symbol", string(snap.Symbol)), slog.String("err", err.Error()))
 	case t.Live():
 		s.anchored.Add(1)
+		if started, ok := s.fetchedAt[snap.Symbol]; ok {
+			if s.resync != nil {
+				s.resync.Observe(time.Since(started))
+			}
+			delete(s.fetchedAt, snap.Symbol)
+		}
 		if !live {
 			s.log.LogAttrs(ctx, slog.LevelInfo, "book synced",
 				slog.String("symbol", string(snap.Symbol)),

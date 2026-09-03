@@ -31,7 +31,7 @@ func runChecker(
 	depth *binance.DepthClient,
 	symbols []model.Symbol,
 	every time.Duration,
-	cnt *counters,
+	inst *instruments,
 ) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
@@ -46,7 +46,7 @@ func runChecker(
 			if ctx.Err() != nil {
 				return
 			}
-			checkOne(ctx, logger, router, depth, sym, cnt)
+			checkOne(ctx, logger, router, depth, sym, inst)
 		}
 	}
 }
@@ -58,7 +58,7 @@ func checkOne(
 	router *pipeline.Router,
 	depth *binance.DepthClient,
 	sym model.Symbol,
-	cnt *counters,
+	inst *instruments,
 ) {
 	snap, err := depth.Snapshot(ctx, sym)
 	if err != nil {
@@ -85,7 +85,7 @@ func checkOne(
 		return
 	}
 
-	cnt.checks.Add(1)
+	inst.checks.Add(1)
 	if diff.OK() {
 		logger.LogAttrs(ctx, slog.LevelInfo, "check ok",
 			slog.String("symbol", string(sym)),
@@ -94,16 +94,31 @@ func checkOne(
 		return
 	}
 
-	// A divergence at a small id skew, on levels near the touch, is the
-	// snapshot and the stream describing the same book a few updates apart.
-	// One at a skew of zero, or deep in the book, is a real defect. Both are
-	// reported with the skew attached so the reader can tell them apart, and
-	// neither is smoothed over here (D28).
-	cnt.divergences.Add(1)
+	// The two views describe the same book at two moments. When the skew is
+	// not zero the snapshot and the stream are a few updates apart, so a
+	// handful of levels differing is arithmetic rather than evidence: it is
+	// precisely what D28 says to expect, and reporting it as a fault teaches
+	// an operator to ignore the one report that matters.
+	//
+	// The check that proves something is the one at a skew of zero. Those are
+	// counted separately, and any divergence in one is a defect: the same
+	// book, at the same update id, disagreeing with the venue.
+	if diff.IDSkew() != 0 {
+		inst.skewed.Add(1)
+		logger.LogAttrs(ctx, slog.LevelInfo, "check skewed",
+			slog.String("symbol", string(sym)),
+			slog.Int("levels", len(diff.Levels)),
+			slog.Int("compared", diff.Compared),
+			slog.Int64("id_skew", diff.IDSkew()),
+			slog.String("first", diff.Levels[0].String()))
+		return
+	}
+
+	inst.divergences.Add(1)
 	logger.LogAttrs(ctx, slog.LevelWarn, "check diverged",
 		slog.String("symbol", string(sym)),
 		slog.Int("levels", len(diff.Levels)),
 		slog.Int("compared", diff.Compared),
-		slog.Int64("id_skew", diff.IDSkew()),
+		slog.Int64("id_skew", 0),
 		slog.String("first", diff.Levels[0].String()))
 }

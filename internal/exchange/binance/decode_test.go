@@ -2,6 +2,7 @@ package binance_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/zuniverse/market-stream/internal/exchange/binance"
 	"github.com/zuniverse/market-stream/internal/model"
@@ -112,5 +113,49 @@ func TestDecodeErrors(t *testing.T) {
 				t.Error("expected error, got nil")
 			}
 		})
+	}
+}
+
+// TestDecodeCarriesTimestamps covers what the tick-to-book histogram is built
+// on: the venue's event time and this process's receive time both reach the
+// event, in Unix nanoseconds (D43).
+func TestDecodeCarriesTimestamps(t *testing.T) {
+	dec := binance.NewDecoder(loadCache(t))
+	received := time.Date(2026, 9, 3, 15, 4, 5, 123456789, time.UTC)
+
+	for _, tc := range []struct{ name, file string }{
+		{"aggTrade", "agg_trade.json"},
+		{"depthUpdate", "depth_update.json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ev, err := dec.Decode(model.Frame{Data: fixture(t, tc.file), ReceivedAt: received})
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			if ev.ReceivedAt != received.UnixNano() {
+				t.Errorf("ReceivedAt = %d, want %d", ev.ReceivedAt, received.UnixNano())
+			}
+			// The fixtures carry "E" in milliseconds; the event holds
+			// nanoseconds, so the value must be a whole number of
+			// milliseconds and must not be the raw field.
+			if ev.ExchangeTime == 0 {
+				t.Fatal("ExchangeTime is zero")
+			}
+			if ev.ExchangeTime%int64(time.Millisecond) != 0 {
+				t.Errorf("ExchangeTime = %d, not a whole millisecond", ev.ExchangeTime)
+			}
+			if ms := ev.ExchangeTime / int64(time.Millisecond); ms < 1_600_000_000_000 {
+				t.Errorf("ExchangeTime = %d ms, too small to be a Unix millisecond timestamp", ms)
+			}
+		})
+	}
+
+	// A frame with no receive time must not produce a huge negative one.
+	ev, err := dec.Decode(model.Frame{Data: fixture(t, "agg_trade.json")})
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if ev.ReceivedAt != 0 {
+		t.Errorf("ReceivedAt = %d for a frame with no time, want 0", ev.ReceivedAt)
 	}
 }

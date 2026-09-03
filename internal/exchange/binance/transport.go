@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -21,7 +22,17 @@ type Transport struct {
 	out         chan<- model.Frame
 	initialWait time.Duration
 	maxWait     time.Duration
+
+	// reconnects counts connections after the first. It is read by whatever
+	// reports metrics, from another goroutine, hence the atomic.
+	reconnects atomic.Uint64
 }
+
+// Reconnects returns how many times the connection has been re-established
+// since Run started. It is the reconnect count per exchange that
+// architecture.md asks for, and a rising one is the signal that a venue is
+// unhealthy well before anything else notices.
+func (t *Transport) Reconnects() uint64 { return t.reconnects.Load() }
 
 // Option configures a Transport.
 type Option func(*Transport)
@@ -58,7 +69,10 @@ func NewTransport(url string, out chan<- model.Frame, opts ...Option) *Transport
 // Owner: the goroutine that calls Run. Exit: ctx cancelled.
 func (t *Transport) Run(ctx context.Context) error {
 	wait := t.initialWait
-	for {
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			t.reconnects.Add(1)
+		}
 		delivered, err := t.runOnce(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()

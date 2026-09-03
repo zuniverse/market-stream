@@ -3,6 +3,7 @@ package binance
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/zuniverse/market-stream/internal/model"
 )
@@ -47,19 +48,53 @@ func (d *Decoder) Decode(f model.Frame) (model.Event, error) {
 		}
 		return model.Event{}, fmt.Errorf("binance: frame carries no event type")
 	}
+	var ev model.Event
+	var err error
 	switch typ {
 	case "aggTrade":
-		return d.decodeAggTrade(payload)
+		ev, err = d.decodeAggTrade(payload)
 	case "depthUpdate":
-		return d.decodeDepthUpdate(payload)
+		ev, err = d.decodeDepthUpdate(payload)
 	default:
 		return model.Event{}, fmt.Errorf("binance: unknown event type %q", typ)
 	}
+	if err != nil {
+		return model.Event{}, err
+	}
+	ev.ReceivedAt = frameNanos(f.ReceivedAt)
+	return ev, nil
+}
+
+// frameNanos converts a receive time to Unix nanoseconds, mapping the zero
+// time to zero rather than to the large negative number it would otherwise
+// produce.
+func frameNanos(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
+}
+
+// eventNanos converts a Binance event time, which is in milliseconds, to Unix
+// nanoseconds. A missing field decodes to zero and stays zero, which is what
+// "unknown" is.
+func eventNanos(ms int64) int64 {
+	if ms == 0 {
+		return 0
+	}
+	return ms * int64(time.Millisecond)
 }
 
 func (d *Decoder) decodeAggTrade(data []byte) (model.Event, error) {
 	var raw struct {
+		// Type is not read. It is here because encoding/json falls back to a
+		// case-insensitive field match, so without an exact home for "e" the
+		// event type, a string, lands in Time, an int64, and the frame fails
+		// to decode. The trap runs both ways: before M5 the decoder needed
+		// the mirror image of this field to stop "E" landing in "e" (D42).
+		Type    string `json:"e"`
 		Symbol  string `json:"s"`
+		Time    int64  `json:"E"`
 		Price   string `json:"p"`
 		Qty     string `json:"q"`
 		Maker   bool   `json:"m"` // true = buyer is maker = sell trade
@@ -81,7 +116,8 @@ func (d *Decoder) decodeAggTrade(data []byte) (model.Event, error) {
 		return model.Event{}, fmt.Errorf("binance: aggTrade qty %q: %w", raw.Qty, err)
 	}
 	return model.Event{
-		Kind: model.KindTrade,
+		Kind:         model.KindTrade,
+		ExchangeTime: eventNanos(raw.Time),
 		Trade: model.Trade{
 			Symbol: inst.Symbol,
 			Price:  price,
@@ -93,7 +129,9 @@ func (d *Decoder) decodeAggTrade(data []byte) (model.Event, error) {
 
 func (d *Decoder) decodeDepthUpdate(data []byte) (model.Event, error) {
 	var raw struct {
+		Type    string      `json:"e"` // see the note in decodeAggTrade
 		Symbol  string      `json:"s"`
+		Time    int64       `json:"E"`
 		FirstID int64       `json:"U"`
 		LastID  int64       `json:"u"`
 		Bids    [][2]string `json:"b"`
@@ -115,7 +153,8 @@ func (d *Decoder) decodeDepthUpdate(data []byte) (model.Event, error) {
 		return model.Event{}, fmt.Errorf("binance: depthUpdate asks: %w", err)
 	}
 	return model.Event{
-		Kind: model.KindBookDelta,
+		Kind:         model.KindBookDelta,
+		ExchangeTime: eventNanos(raw.Time),
 		BookDelta: model.BookDelta{
 			Symbol:  inst.Symbol,
 			FirstID: raw.FirstID,

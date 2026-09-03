@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/zuniverse/market-stream/internal/exchange/binance"
+	"github.com/zuniverse/market-stream/internal/metrics"
 	"github.com/zuniverse/market-stream/internal/model"
 	"github.com/zuniverse/market-stream/internal/pipeline"
 	"github.com/zuniverse/market-stream/internal/record"
@@ -86,14 +87,61 @@ func (l *symbolList) Set(v string) error {
 	return nil
 }
 
-// counters are the figures the main loop owns and the metrics handler reads,
-// which is why they are atomics.
-type counters struct {
+// instruments are the figures the main loop owns and the metrics handler
+// reads, which is why the counters are atomics and the histograms are safe
+// for concurrent use.
+type instruments struct {
+	started time.Time
+
 	frames      atomic.Uint64
 	decodeErrs  atomic.Uint64
 	routeErrs   atomic.Uint64
 	checks      atomic.Uint64
 	divergences atomic.Uint64
+	skewed      atomic.Uint64
+
+	// tickToBook is the primary health indicator: the venue's event time to
+	// the moment a book applies the event. It crosses two clocks, so it
+	// carries their skew, which is why the histogram counts observations
+	// below zero separately instead of clamping them (D43).
+	tickToBook *metrics.Histogram
+	decode     *metrics.Histogram
+	resync     *metrics.Histogram
+}
+
+// Bucket bounds. Wide enough at the top to show a stall, fine enough at the
+// bottom that a healthy run does not collapse into the first bucket, and few
+// enough that the exposition stays readable.
+var (
+	tickToBookBounds = []time.Duration{
+		time.Millisecond, 2 * time.Millisecond, 5 * time.Millisecond,
+		10 * time.Millisecond, 25 * time.Millisecond, 50 * time.Millisecond,
+		100 * time.Millisecond, 250 * time.Millisecond, 500 * time.Millisecond,
+		time.Second, 2 * time.Second, 5 * time.Second,
+	}
+	decodeBounds = []time.Duration{
+		time.Microsecond, 2 * time.Microsecond, 5 * time.Microsecond,
+		10 * time.Microsecond, 25 * time.Microsecond, 50 * time.Microsecond,
+		100 * time.Microsecond, 250 * time.Microsecond, 500 * time.Microsecond,
+		time.Millisecond, 5 * time.Millisecond,
+	}
+	resyncBounds = []time.Duration{
+		10 * time.Millisecond, 25 * time.Millisecond, 50 * time.Millisecond,
+		100 * time.Millisecond, 250 * time.Millisecond, 500 * time.Millisecond,
+		time.Second, 2500 * time.Millisecond, 5 * time.Second, 10 * time.Second,
+	}
+)
+
+func newInstruments() *instruments {
+	return &instruments{
+		started: time.Now(),
+		tickToBook: metrics.NewHistogram("market_stream_tick_to_book_seconds",
+			"Venue event time to the moment a book applied the event.", tickToBookBounds),
+		decode: metrics.NewHistogram("market_stream_decode_seconds",
+			"Time to decode one frame into an event.", decodeBounds),
+		resync: metrics.NewHistogram("market_stream_resync_seconds",
+			"Time from a book asking for a snapshot to one anchoring it.", resyncBounds),
+	}
 }
 
 func main() {
@@ -124,7 +172,7 @@ func main() {
 // run owns the process lifetime. It returns context.Canceled on a clean
 // shutdown, which main treats as success.
 func run(ctx context.Context, cfg config, logger *slog.Logger) error {
-	var cnt counters
+	inst := newInstruments()
 
 	// Fetched once at startup. The cache serves symbol normalisation in the
 	// decoder, decimal exponents in the log subscriber, and the reverse
@@ -176,10 +224,12 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 	defer pub.Close()
 
 	router, err := pipeline.NewRouter(pipeline.RouterConfig{
-		Shards:    cfg.shards,
-		QueueCap:  shardQueueCap,
-		Snapshots: snapshots,
-		Log:       logger,
+		Shards:     cfg.shards,
+		QueueCap:   shardQueueCap,
+		Snapshots:  snapshots,
+		Log:        logger,
+		TickToBook: inst.tickToBook,
+		Resync:     inst.resync,
 	})
 	if err != nil {
 		return err
@@ -188,6 +238,9 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 		return err
 	}
 	defer router.Close()
+
+	frames := make(chan model.Frame, frameCap)
+	transport := binance.NewTransport(streamURL, frames)
 
 	// Background workers stop before the stages they read from. The deferred
 	// calls run last-registered-first, so the order here is: workers stop,
@@ -203,7 +256,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		serveMetrics(workers, logger, cfg.metricsAddr, router, pub, recorder, &cnt)
+		serveMetrics(workers, logger, cfg.metricsAddr, router, pub, recorder, transport, inst)
 	}()
 
 	if cfg.checkEvery > 0 {
@@ -211,17 +264,19 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runChecker(workers, logger, router, depth, cfg.symbols, cfg.checkEvery, &cnt)
+			runChecker(workers, logger, router, depth, cfg.symbols, cfg.checkEvery, inst)
 		}()
 	}
-
-	frames := make(chan model.Frame, frameCap)
-	transport := binance.NewTransport(streamURL, frames)
 
 	// Owner: run. Exit: ctx cancelled, which is the only way Transport.Run
 	// returns. The buffer of 1 keeps the send from blocking after run returns.
 	errc := make(chan error, 1)
 	go func() { errc <- transport.Run(ctx) }()
+
+	// The end-of-run summary is the point of the instruments: a process that
+	// ran for six hours should say what it did on the way out, not leave it
+	// to whoever was scraping.
+	defer func() { logFinal(logger, router, pub, recorder, transport, inst) }()
 
 	logger.LogAttrs(ctx, slog.LevelInfo, "started",
 		slog.String("symbols", cfg.symbols.String()),
@@ -237,15 +292,17 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 	for {
 		select {
 		case f := <-frames:
-			cnt.frames.Add(1)
+			inst.frames.Add(1)
 			if recorder != nil {
 				// Before decoding: what is recorded is what arrived, so that
 				// the decoder stays inside the loop a profile measures (D6).
 				recorder.Frame(f)
 			}
+			decodeStart := time.Now()
 			ev, err := dec.Decode(f)
+			inst.decode.Observe(time.Since(decodeStart))
 			if err != nil {
-				cnt.decodeErrs.Add(1)
+				inst.decodeErrs.Add(1)
 				logger.LogAttrs(ctx, slog.LevelWarn, "decode", slog.String("err", err.Error()))
 				continue
 			}
@@ -253,13 +310,13 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 			// is the one that may block. Publishing first would show a
 			// subscriber an event the books have not accepted yet.
 			if err := router.Route(ctx, ev); err != nil {
-				cnt.routeErrs.Add(1)
+				inst.routeErrs.Add(1)
 				return err
 			}
 			pub.Publish(ev)
 
 		case <-ticker.C:
-			logSummary(ctx, logger, router, pub, recorder, &cnt)
+			logSummary(ctx, logger, router, pub, recorder, inst)
 
 		case err := <-errc:
 			return err
@@ -270,11 +327,11 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 // logSummary writes one line describing the run so far. M6 replaces the
 // counters here with the histograms that give the same picture with
 // percentiles rather than totals.
-func logSummary(ctx context.Context, logger *slog.Logger, router *pipeline.Router, pub *pipeline.Publisher, rec *record.Recorder, cnt *counters) {
+func logSummary(ctx context.Context, logger *slog.Logger, router *pipeline.Router, pub *pipeline.Publisher, rec *record.Recorder, inst *instruments) {
 	st := router.Stats()
 	logger.LogAttrs(ctx, slog.LevelInfo, "summary",
-		slog.Uint64("frames", cnt.frames.Load()),
-		slog.Uint64("decode_errors", cnt.decodeErrs.Load()),
+		slog.Uint64("frames", inst.frames.Load()),
+		slog.Uint64("decode_errors", inst.decodeErrs.Load()),
 		slog.Group("book",
 			slog.Uint64("applied", st.Applied),
 			slog.Uint64("discarded", st.Discarded),
@@ -285,8 +342,9 @@ func logSummary(ctx context.Context, logger *slog.Logger, router *pipeline.Route
 			slog.Uint64("fetch_failures", st.FetchFails),
 			slog.Uint64("errors", st.Errors)),
 		slog.Group("checks",
-			slog.Uint64("run", cnt.checks.Load()),
-			slog.Uint64("diverged", cnt.divergences.Load())),
+			slog.Uint64("run", inst.checks.Load()),
+			slog.Uint64("diverged", inst.divergences.Load()),
+			slog.Uint64("skewed", inst.skewed.Load())),
 		slog.Any("queue_depth", router.QueueDepth()),
 		recordAttr(rec),
 		droppedAttr(pub))
@@ -315,3 +373,65 @@ func droppedAttr(pub *pipeline.Publisher) slog.Attr {
 	}
 	return slog.Group("dropped", attrs...)
 }
+
+// logFinal writes the end-of-run summary. It is the one place the run reports
+// what it did rather than what it is doing, and it is deliberately made of
+// measured figures: how many messages, how fast, how late, how much was
+// dropped, how often a book had to be rebuilt.
+//
+// The percentiles come from bucketed histograms, so each is only as precise
+// as the bucket it lands in. That is stated in the line itself rather than in
+// a document nobody reads next to the number.
+func logFinal(logger *slog.Logger, router *pipeline.Router, pub *pipeline.Publisher, rec *record.Recorder, tr *binance.Transport, inst *instruments) {
+	elapsed := time.Since(inst.started)
+	frames := inst.frames.Load()
+	var rate float64
+	if elapsed > 0 {
+		rate = float64(frames) / elapsed.Seconds()
+	}
+	st := router.Stats()
+
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "run summary",
+		slog.Duration("elapsed", elapsed.Round(time.Second)),
+		slog.Uint64("frames", frames),
+		slog.Float64("frames_per_second", round1(rate)),
+		slog.Uint64("decode_errors", inst.decodeErrs.Load()),
+		slog.Uint64("route_errors", inst.routeErrs.Load()),
+		latencyAttr("tick_to_book", inst.tickToBook),
+		latencyAttr("decode", inst.decode),
+		latencyAttr("resync", inst.resync),
+		slog.Group("book",
+			slog.Uint64("applied", st.Applied),
+			slog.Uint64("gaps", st.Gaps),
+			slog.Uint64("resyncs", st.Snapshots),
+			slog.Uint64("refetches", st.Refetches),
+			slog.Uint64("errors", st.Errors)),
+		slog.Group("checks",
+			slog.Uint64("run", inst.checks.Load()),
+			slog.Uint64("diverged", inst.divergences.Load()),
+			slog.Uint64("skewed", inst.skewed.Load())),
+		slog.Uint64("reconnects", tr.Reconnects()),
+		recordAttr(rec),
+		droppedAttr(pub),
+		slog.String("percentiles", "interpolated from bucket bounds; accurate to the width of the bucket"))
+}
+
+// latencyAttr renders one histogram as a group, or an empty one when nothing
+// was observed. An empty group is more honest than a p99 of zero.
+func latencyAttr(name string, h *metrics.Histogram) slog.Attr {
+	if h.Count() == 0 {
+		return slog.Group(name, slog.String("observations", "none"))
+	}
+	return slog.Group(name,
+		slog.Uint64("count", h.Count()),
+		slog.Duration("mean", h.Mean()),
+		slog.Duration("p50", h.Quantile(0.50)),
+		slog.Duration("p95", h.Quantile(0.95)),
+		slog.Duration("p99", h.Quantile(0.99)),
+		// A negative tick-to-book means the venue's clock is ahead of this
+		// machine's. It says nothing about the pipeline and would drag the
+		// percentiles down if it were counted as a fast observation.
+		slog.Uint64("negative", h.Negative()))
+}
+
+func round1(v float64) float64 { return float64(int64(v*10+0.5)) / 10 }

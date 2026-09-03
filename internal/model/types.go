@@ -68,7 +68,20 @@ type Snapshot struct {
 // Event is the canonical pipeline message type.
 // Kind selects which payload field is populated; the others are zero (D15).
 type Event struct {
-	Kind      EventKind
+	Kind EventKind
+
+	// ExchangeTime is when the venue says the event happened, and ReceivedAt
+	// is when this process read the frame it arrived in, both in Unix
+	// nanoseconds. Zero means unknown.
+	//
+	// The difference between ExchangeTime and the moment a book applies the
+	// event is the tick-to-book latency, the primary health indicator in
+	// architecture.md. It is measured across two clocks, so it carries
+	// whatever skew there is between the venue's and this machine's, which is
+	// why a negative one is counted separately rather than clamped (D43).
+	ExchangeTime int64
+	ReceivedAt   int64
+
 	Trade     Trade
 	BookDelta BookDelta
 	Snapshot  Snapshot

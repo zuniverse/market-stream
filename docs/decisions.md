@@ -1341,3 +1341,93 @@ decoy is documented there too.
 **Consequence:** `docs/baseline.md` now describes code that no longer exists.
 It says so at the top and is otherwise left alone: a baseline that is edited
 to match the present is not a baseline.
+
+---
+
+## D43. The histogram is written here, and a negative latency is not a fast one
+
+**Chosen:** `internal/metrics` holds one type, a duration histogram with fixed
+bucket bounds, lock free, rendering itself in the Prometheus text format and
+answering interpolated quantiles for the end-of-run summary.
+
+**Rejected, and this supersedes what D34 expected:** `prometheus/client_golang`.
+D34 said "M6, which introduces the histograms, is where writing the format by
+hand stops being reasonable", and having written one, that turned out not to
+hold. A bucketed histogram is a bounds slice, an atomic per bucket, and a loop
+over cumulative counts to render. The library brings four modules, a global
+registry, and a collector interface, to replace about a hundred lines that
+have no dependency and no configuration. D21 declined `zerolog` for less than
+that.
+
+The expectation in D34 stands as a record of what was believed at the time.
+What changed is that the thing was measured against the alternative rather
+than assumed, which is the same move the rest of this project makes about
+performance.
+
+**Chosen:** an observation below zero is counted in its own field and kept out
+of the buckets, the sum and the count.
+
+**Rejected:** clamping it to zero, which is what most histogram APIs do. The
+measurement it happens to is tick-to-book, which spans the venue's clock and
+this machine's, so a negative value means the two disagree by more than the
+latency. Clamping turns evidence about the clocks into a very fast
+observation, drags the p50 down, and hides both facts at once. Counting it
+separately means a run whose `_negative_total` is climbing is visibly a run
+whose numbers cannot be trusted.
+
+**Chosen:** quantiles are interpolated inside the bucket the quantile falls
+in, and every place that prints one says so. A value in the `+Inf` bucket
+cannot be interpolated and comes back as the largest bound, which understates
+it. A p99 quoted without its bucket width is a number pretending to a
+precision it does not have.
+
+**Chosen:** the tick-to-book histogram is optional in the router
+configuration, and `cmd/replay` does not pass one. Measuring it during a
+replay would compare a recorded timestamp against the present, which reports
+how long ago the recording was made.
+
+**Consequence, and it is the important one:** the tick-to-book figure is a
+health indicator, not a cost. Measured on the live feed it is a p50 of 175 ms,
+of which decoding is 62 microseconds. The rest is the depth stream's 100 ms
+aggregation window, the wire time from the venue, and clock skew. It is worth
+having because it moves when something is wrong. It is not worth quoting as
+what this pipeline costs, which is what the replay figures are for, and
+`operations.md` says so next to the number rather than in a footnote.
+
+---
+
+## D44. A divergence at a non-zero id skew is not reported as a fault
+
+**Chosen:** the correctness harness classifies a comparison three ways. Equal
+is `check ok`. Disagreeing at an id skew of zero is `check diverged`, logged
+at warning level and counted in `market_stream_check_divergences_total`.
+Disagreeing while the two views are some updates apart is `check skewed`,
+logged at info and counted separately.
+
+**Rejected:** the previous behaviour, which was to warn about any
+disagreement. It was found by running the daemon rather than by a test: three
+checks out of six reported a divergence, every one of them one or two levels
+out of about nine thousand nine hundred compared, at a skew of one to three
+updates. That is precisely what D28 predicted and it is arithmetic, not
+evidence: a snapshot fetched over the network describes the book a moment
+before or after the stream does, so the levels touched in between differ.
+
+A monitor that cries wolf on a healthy run is worse than no monitor. It
+teaches an operator to ignore the one report that matters.
+
+**Rejected:** deciding that a divergence is expected when the number of
+differing levels is small relative to the skew. It is the more precise rule
+and it needs a constant nobody can derive: how many levels one update may
+touch is a property of the venue, the symbol and the moment.
+
+**Why the zero-skew case is the one that means something:** at the same update
+id, the maintained book and the venue's own view describe the same state.
+There is no benign reason for them to differ. Every other comparison is
+suggestive at best, which is why both counts are exposed: the skewed one says
+the check is running, the zero-skew one says the books are right.
+
+**Consequence:** if the skew were never zero, nothing would ever be proven. In
+a measured run of three symbols, four of six checks landed at a skew of zero
+and all four agreed exactly across about 9950 levels each. The skew reaching
+zero regularly is itself a property worth watching, and it is in the log line
+either way.

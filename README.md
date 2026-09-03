@@ -69,21 +69,27 @@ anything. `-speed 1` replays in real time; the default replays as fast as the
 pipeline will take the frames, which measures maximum throughput and
 saturation rather than a realistic load shape.
 
+## Operating it
+
+[docs/operations.md](docs/operations.md) covers the flags, what the metrics
+mean, measured behaviour on the live feed, and what to look at when something
+goes wrong.
+
 ## Observability
 
 Prometheus metrics are available on `http://127.0.0.1:9090/metrics` by default
 (`-metrics-addr` to override), alongside `/healthz`. Key indicators:
 
-| Metric                                  | What it shows                          |
-| --------------------------------------- | -------------------------------------- |
-| `market_stream_gaps_total`              | Holes detected in an update id sequence |
-| `market_stream_snapshots_total`         | Snapshots that anchored a book          |
-| `market_stream_check_divergences_total` | Checks that found a book to be wrong    |
-| `market_stream_shard_queue_depth`       | Saturation per shard                    |
-| `market_stream_subscriber_dropped_total`| Events dropped per slow subscriber      |
+| Metric                                     | What it shows                            |
+| ------------------------------------------ | ---------------------------------------- |
+| `market_stream_tick_to_book_seconds`       | Venue event time to book applied          |
+| `market_stream_check_divergences_total`    | Books found wrong at the same update id   |
+| `market_stream_gaps_total`                 | Holes detected in an update id sequence   |
+| `market_stream_shard_queue_depth`          | Saturation per shard                      |
+| `market_stream_subscriber_dropped_total`   | Events dropped per slow subscriber        |
 
-The tick-to-book latency histogram, which is the primary health indicator, is
-M6 and is not exposed yet.
+`market_stream_check_divergences_total` should always be zero. It is the only
+number that says the books are right rather than merely plausible.
 
 ## Project layout
 

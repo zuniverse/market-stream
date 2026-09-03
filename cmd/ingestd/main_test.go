@@ -211,9 +211,10 @@ func TestRunEndToEnd(t *testing.T) {
 		t.Errorf("healthz = HTTP %d", resp.StatusCode)
 	}
 
-	if got := metricValue(t, body, "market_stream_recorded_total"); got == 0 {
-		t.Error("nothing was recorded")
-	}
+	// The recorder writes on its own goroutine, so it has its own wait: the
+	// scrape that saw the first applied delta can legitimately predate the
+	// first record reaching disk.
+	body = waitForMetric(t, addr, "market_stream_recorded_total", 1)
 	if got := metricValue(t, body, "market_stream_record_dropped_total"); got != 0 {
 		t.Errorf("the recorder dropped %d frames on a local run", got)
 	}
@@ -360,7 +361,7 @@ func TestMetricsTextFormat(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	writeMetrics(&buf, router, pub, nil, &counters{})
+	writeMetrics(&buf, router, pub, nil, nil, newInstruments())
 	body := buf.String()
 
 	var samples, types, helps int

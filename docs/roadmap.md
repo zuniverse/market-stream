@@ -245,6 +245,11 @@ and operational notes.
 Done when: documented behaviour under load rests on measured figures rather
 than adjectives.
 
+Written up in `docs/operations.md`. The tick-to-book figure carries its
+caveat next to it: it spans two clocks and the venue's aggregation window,
+so it is a health indicator rather than a measure of what this process
+costs (D43).
+
 ### Reduced-scope fallback
 
 If book correctness cannot be established at M2, ship v0.1 as a trades-only

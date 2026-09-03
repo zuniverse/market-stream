@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zuniverse/market-stream/internal/metrics"
 	"github.com/zuniverse/market-stream/internal/model"
 )
 
@@ -359,4 +360,85 @@ func TestCheckComparesAgainstVenue(t *testing.T) {
 	if _, err := r.Check(ctx, model.Snapshot{Symbol: "NOPE-USDT"}); !errors.Is(err, ErrUnknownSymbol) {
 		t.Errorf("Check for an untracked symbol = %v, want %v", err, ErrUnknownSymbol)
 	}
+}
+
+// TestRouterObservesLatencies covers the two measurements the book stage is
+// the only place that can take: how old a delta is when it reaches a book,
+// and how long a resync took (D43).
+func TestRouterObservesLatencies(t *testing.T) {
+	tickToBook := metrics.NewHistogram("tick", "h", []time.Duration{
+		time.Millisecond, 10 * time.Millisecond, time.Second, time.Hour,
+	})
+	resync := metrics.NewHistogram("resync", "h", []time.Duration{
+		time.Millisecond, 10 * time.Millisecond, time.Second,
+	})
+
+	syms := testSymbols(1)
+	sym := syms[0]
+	v := newVenue(syms, 71)
+	r := newTestRouter(t, RouterConfig{
+		Shards: 1, QueueCap: 8, Snapshots: v,
+		TickToBook: tickToBook, Resync: resync,
+	})
+	ctx := context.Background()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(71))
+	now := time.Now()
+	for i := range 30 {
+		d := v.next(sym, rng)
+		ev := model.Event{
+			Kind:         model.KindBookDelta,
+			BookDelta:    d,
+			ExchangeTime: now.Add(-time.Duration(i) * time.Millisecond).UnixNano(),
+		}
+		if err := r.Route(ctx, ev); err != nil {
+			t.Fatalf("Route: %v", err)
+		}
+	}
+	waitFor(t, "the deltas to be applied", func() bool {
+		return r.Stats().Applied > 0 && r.Stats().Snapshots == 1
+	})
+	r.Close()
+
+	if got := tickToBook.Count(); got == 0 {
+		t.Error("no tick-to-book observation was taken")
+	}
+	if got := tickToBook.Negative(); got != 0 {
+		t.Errorf("%d observations were negative, but every event was stamped in the past", got)
+	}
+	if got := resync.Count(); got != 1 {
+		t.Errorf("resync observations = %d, want 1 for the initial anchoring", got)
+	}
+
+	// An event with no exchange time must not be observed as an enormous
+	// latency measured from the Unix epoch.
+	if p99 := tickToBook.Quantile(0.99); p99 > time.Second {
+		t.Errorf("p99 = %v, want it in the millisecond range", p99)
+	}
+}
+
+// TestRouterWithoutHistogramsIsUnaffected covers the nil case, which is what
+// cmd/replay uses: measuring latency against a recorded timestamp would
+// report how long ago the recording was made.
+func TestRouterWithoutHistogramsIsUnaffected(t *testing.T) {
+	syms := testSymbols(1)
+	v := newVenue(syms, 73)
+	r := newTestRouter(t, RouterConfig{Shards: 1, QueueCap: 8, Snapshots: v})
+	ctx := context.Background()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	rng := rand.New(rand.NewSource(73))
+	for range 5 {
+		ev := model.Event{Kind: model.KindBookDelta, BookDelta: v.next(syms[0], rng), ExchangeTime: 1}
+		if err := r.Route(ctx, ev); err != nil {
+			t.Fatalf("Route: %v", err)
+		}
+	}
+	waitFor(t, "the book to sync", func() bool { return r.Stats().Snapshots == 1 })
+	r.Close()
+	assertBooksMatch(t, r, v)
 }

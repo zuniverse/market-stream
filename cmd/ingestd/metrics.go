@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/zuniverse/market-stream/internal/exchange/binance"
 	"github.com/zuniverse/market-stream/internal/pipeline"
 	"github.com/zuniverse/market-stream/internal/record"
 )
@@ -26,11 +27,11 @@ import (
 // Putting an http.Server in the process now is also what architecture.md
 // asks for: the future query API attaches to a server that already exists
 // rather than bringing its own.
-func serveMetrics(ctx context.Context, logger *slog.Logger, addr string, router *pipeline.Router, pub *pipeline.Publisher, rec *record.Recorder, cnt *counters) {
+func serveMetrics(ctx context.Context, logger *slog.Logger, addr string, router *pipeline.Router, pub *pipeline.Publisher, rec *record.Recorder, tr *binance.Transport, inst *instruments) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		writeMetrics(w, router, pub, rec, cnt)
+		writeMetrics(w, router, pub, rec, tr, inst)
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -79,15 +80,15 @@ func serveMetrics(ctx context.Context, logger *slog.Logger, addr string, router 
 }
 
 // writeMetrics renders the current counters in the Prometheus text format.
-func writeMetrics(w io.Writer, router *pipeline.Router, pub *pipeline.Publisher, rec *record.Recorder, cnt *counters) {
+func writeMetrics(w io.Writer, router *pipeline.Router, pub *pipeline.Publisher, rec *record.Recorder, tr *binance.Transport, inst *instruments) {
 	st := router.Stats()
 	counter := func(name, help string, v uint64) {
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n%s %d\n", name, help, name, name, v)
 	}
 
-	counter("market_stream_frames_total", "Websocket frames received.", cnt.frames.Load())
-	counter("market_stream_decode_errors_total", "Frames that failed to decode.", cnt.decodeErrs.Load())
-	counter("market_stream_route_errors_total", "Events that could not be handed to a shard.", cnt.routeErrs.Load())
+	counter("market_stream_frames_total", "Websocket frames received.", inst.frames.Load())
+	counter("market_stream_decode_errors_total", "Frames that failed to decode.", inst.decodeErrs.Load())
+	counter("market_stream_route_errors_total", "Events that could not be handed to a shard.", inst.routeErrs.Load())
 	counter("market_stream_events_total", "Events handled by the book stage.", st.Events)
 	counter("market_stream_deltas_applied_total", "Deltas applied to a book.", st.Applied)
 	counter("market_stream_deltas_discarded_total", "Events already reflected in a book.", st.Discarded)
@@ -98,8 +99,16 @@ func writeMetrics(w io.Writer, router *pipeline.Router, pub *pipeline.Publisher,
 	counter("market_stream_fetch_failures_total", "Snapshot requests that returned an error.", st.FetchFails)
 	counter("market_stream_book_errors_total", "Events a book refused.", st.Errors)
 	counter("market_stream_queries_total", "Book reads answered.", st.Queries)
-	counter("market_stream_checks_total", "Books compared against a fresh snapshot.", cnt.checks.Load())
-	counter("market_stream_check_divergences_total", "Comparisons that found a divergence.", cnt.divergences.Load())
+	if tr != nil {
+		counter("market_stream_reconnects_total", "Websocket connections after the first.", tr.Reconnects())
+	}
+	counter("market_stream_checks_total", "Books compared against a fresh snapshot.", inst.checks.Load())
+	counter("market_stream_check_divergences_total",
+		"Comparisons that disagreed with the venue at the same update id. Any is a defect.",
+		inst.divergences.Load())
+	counter("market_stream_check_skewed_total",
+		"Comparisons that disagreed while the snapshot and the book were a few updates apart. Expected.",
+		inst.skewed.Load())
 
 	if rec != nil {
 		rst := rec.Stats()
@@ -113,6 +122,12 @@ func writeMetrics(w io.Writer, router *pipeline.Router, pub *pipeline.Publisher,
 	for i, depth := range router.QueueDepth() {
 		fmt.Fprintf(w, "market_stream_shard_queue_depth{shard=\"%d\"} %d\n", i, depth)
 	}
+
+	// The histograms last, since they are the longest and a reader scanning
+	// for a counter should not have to page past them.
+	inst.tickToBook.WriteProm(w, "")
+	inst.decode.WriteProm(w, "")
+	inst.resync.WriteProm(w, "")
 
 	dropped := pub.Dropped()
 	names := make([]string, 0, len(dropped))
