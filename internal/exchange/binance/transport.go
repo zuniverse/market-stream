@@ -11,6 +11,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Frame is a raw websocket message received from Binance with its arrival
+// time. Recording captures frames exactly as they arrive, before any
+// decoding, so that the decoder stays inside the measured loop (D6).
+type Frame struct {
+	Data       []byte
+	ReceivedAt time.Time
+}
+
 // Transport maintains a persistent Binance websocket connection.
 // It reconnects with exponential backoff and jitter after any failure.
 // A serverShutdown frame triggers an immediate reconnect without a delay.
