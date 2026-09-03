@@ -1,15 +1,29 @@
 // Package pipeline assembles the processing stages between the exchange
 // source and the subscribers.
 //
-// The shard router distributes events to N shard goroutines by
-// hash(symbol) % N. N is set at startup via the -shards flag (D18). Each
-// shard goroutine is the exclusive owner of its assigned books and processes
-// updates and snapshot queries in strict arrival order with no locking on book
-// state (D3).
+// The Router is the book stage. It sends each event to the shard that owns
+// that symbol, by hash(symbol) % N, and each shard goroutine is the exclusive
+// owner of every book assigned to it: no mutex on book state, and deltas for
+// one symbol applied in strict arrival order (D3). N defaults to
+// runtime.NumCPU(), which is what the -shards flag will pass in once ingestd
+// builds a router (D18). Each shard also
+// drives the resync procedure for its symbols, issuing snapshot requests on
+// separate goroutines so that a book waiting on the network never stops the
+// books beside it (D30).
 //
-// The publisher fans out to registered subscribers over individual bounded
-// channels. When a subscriber channel is full, the oldest message is dropped
-// and a per-subscriber counter is incremented. A slow subscriber never applies
-// backpressure to the shard stage. This is the boundary between the lossless
-// path (transport to book) and the lossy path (book to subscribers).
+// The Publisher fans out to registered subscribers over individual bounded
+// channels, dropping the oldest queued event when one is full and counting
+// the drop per subscriber.
+//
+// The two stages have opposite policies when a queue fills, and that is the
+// point. Router.Route blocks: this is the lossless path, where a dropped
+// delta corrupts a book, so overload propagates backwards as backpressure and
+// the correct response is a resync, which is bounded work. Publisher.Publish
+// never blocks: past the book stage freshness beats completeness, so a slow
+// subscriber loses events rather than slowing the pipeline. Not all data in
+// this pipeline is worth the same, and the difference is meant to be visible
+// in the code rather than only in the architecture document.
+//
+// Nothing here reads a book yet. The query path that lets a caller read one
+// without taking a lock is M2.6.
 package pipeline

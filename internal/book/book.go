@@ -18,6 +18,12 @@ var (
 	ErrDuplicatePrice = errors.New("book: duplicate price in snapshot side")
 )
 
+// ErrSnapshotBehind is returned by Tracker.Load for a snapshot that predates
+// the position of a book that is already live. Nothing is wrong: the caller
+// simply has an older snapshot than the book, and there is nothing to do
+// with it.
+var ErrSnapshotBehind = errors.New("book: snapshot behind the applied position")
+
 // side is one half of a book. Levels are kept sorted so that index 0 is
 // always the top of book: bids descend by price, asks ascend. Both sides
 // therefore read the same way, and the hot operations (best price, first N

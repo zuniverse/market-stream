@@ -208,6 +208,11 @@ func (t *Tracker) FetchFailed() { t.fetching = false }
 //   - the rest are applied in order,
 //   - live application resumes.
 //
+// A snapshot older than the position of a book that is already live is
+// refused with ErrSnapshotBehind and changes nothing. It is not a fault: two
+// snapshots can be in flight at once when one arrives on the stream while
+// another was requested, and the later one to land may be the older one.
+//
 // The snapshot may land too old to be usable, when the stream ran further
 // ahead than the buffer's oldest held delta while the request was in flight.
 // That is not an error: Load keeps the deltas it could not place, leaves the
@@ -217,6 +222,14 @@ func (t *Tracker) Load(s model.Snapshot) error {
 	t.fetching = false
 	if s.Symbol != t.book.Symbol() {
 		return fmt.Errorf("book %s: snapshot for symbol %s", t.book.Symbol(), s.Symbol)
+	}
+	if t.Live() && s.LastID < t.seq.LastID() {
+		// A live book already holds every update up to LastID, so a snapshot
+		// from before that describes a state it has moved past. Applying it
+		// would rewind the book to a moment that has gone, and the buffer is
+		// empty, so nothing could roll it forward again.
+		return fmt.Errorf("book %s: snapshot %d behind applied id %d: %w",
+			t.book.Symbol(), s.LastID, t.seq.LastID(), ErrSnapshotBehind)
 	}
 	if err := t.book.Reset(s.Bids, s.Asks); err != nil {
 		// Reset leaves the book untouched on failure, and the tracker still

@@ -711,3 +711,93 @@ a single instant would not.
 **Not built:** the loop that runs the check periodically. It needs a goroutine
 with an owner and a way to read a book it does not own, which is M2.5 and
 M2.6. Compare is the part that has to be right, and it is testable now.
+
+---
+
+## D29. Route blocks, Publish drops
+
+**Chosen:** `Router.Route` blocks until the owning shard accepts the event, or
+until the caller's context is cancelled, in which case it returns `ctx.Err()`
+so the producer knows the event was not delivered. Shard queues are bounded
+and their overflow policy is to stop the sender.
+
+**Rejected:** a drop-oldest policy on the shard queues, matching the
+publisher. It would make the two stages uniform and it would corrupt books:
+the dropped delta is detected as a sequence gap, so every overload burst turns
+into a resync storm, and a full-depth snapshot costs 250 request weight (D25).
+Dropping on the lossless path buys a shorter queue and pays for it with the
+most expensive recovery in the system.
+
+**Rejected:** an unbounded shard queue, which never blocks and never drops. It
+converts backpressure into memory growth, and the failure arrives later, all
+at once, and as an OOM rather than as a slow producer.
+
+**Why:** the two stages are the two halves of the central claim in
+`architecture.md`, that not all data in the pipeline is worth the same. A
+delta is worth blocking a producer for, because losing it costs a resync. A
+log line for a subscriber is not, because losing it costs a log line. Putting
+the two policies in adjacent types with opposite behaviour is what makes the
+claim visible in the code rather than only in a document.
+
+**Chosen, on ownership:** the shard loop exits when its input channel is
+closed by `Close`, and does not select on `ctx.Done`. Same reasoning as D20: a
+`select` with both cases ready picks at random, so a cancelled context would
+discard an arbitrary prefix of a queue that is bounded and therefore cheap to
+drain. `ctx` reaches the snapshot requests, which is where abandoning work
+early actually helps.
+
+**Chosen, on hashing:** FNV-1a written out over the symbol bytes, rather than
+`hash/maphash`. `maphash` is seeded per process, so the shard a symbol lands
+on would differ between runs, and two replays of one recording would not be
+comparable (D5). Writing the hash out also keeps it allocation-free on the
+hot path.
+
+**Consequence:** `Route` is safe to call from several goroutines at once,
+unlike `Publish`. A channel send needs no help; the publisher's drop-oldest
+does, because it receives from the queue it also sends to. One router can
+therefore serve several connections.
+
+---
+
+## D30. The shard fetches snapshots, on a goroutine per request
+
+**Chosen:** the shard owns the snapshot fetches for its symbols. When a
+tracker reports it needs one (D27), the shard starts a goroutine that calls
+the `Snapshotter` and sends the result back on the shard's own channel, where
+the loop picks it up between deltas. A failed request is held for a retry
+delay inside that goroutine before the failure is reported back.
+
+**Rejected:** fetching inline in the shard loop. It is three lines shorter and
+it stops every book in the shard for the duration of an HTTP round trip. With
+symbols sharded across N goroutines, one symbol resyncing would stall roughly
+1/N of the process.
+
+**Rejected:** a shared fetch worker pool for all shards. It bounds concurrent
+requests, which is a real concern given the per-IP weight budget, and it needs
+a queue, a result routing table back to the originating shard, and its own
+lifecycle. The bound it provides is already provided more cheaply: a tracker
+allows one outstanding request per symbol, so the ceiling is the symbol count
+and the steady rate is bounded by the retry delay.
+
+**Rejected:** reporting a failed request immediately and letting the shard
+schedule the retry. The shard would need per-symbol timers, and the tracker
+would sit fetchable between the failure and the timer, which is the state that
+produces a request per delta.
+
+**Why:** the goroutine per request is the smallest thing that keeps network
+latency off the loop that owns book state. Its lifetime is one request, its
+owner is the shard, and its exit is the result being delivered or the shard
+having stopped, which is the whole of what the goroutine ownership rule asks
+for.
+
+**Consequence:** at shutdown, a snapshot still in flight is abandoned. The
+shard closes a `quit` channel as it returns, the fetch goroutine selects on it
+rather than blocking on a send nobody will receive, and `Close` waits for it.
+A book that was mid-resync at shutdown is simply never anchored, which costs
+nothing: it is discarded with the process.
+
+**Consequence:** the retry delay is a constant rather than an exponential
+backoff. The one-request-per-symbol rule already bounds the rate, and a
+per-symbol backoff schedule is state to keep, to reset, and to get wrong.
+Worth revisiting only if a resync storm is ever observed, per the
+no-optimisation-without-a-measurement rule.

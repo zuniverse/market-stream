@@ -386,6 +386,48 @@ func TestTrackerInvalidLevels(t *testing.T) {
 	})
 }
 
+// TestTrackerRefusesSnapshotBehindBook covers the invariant a live book must
+// hold: it never rewinds. Two snapshots can be in flight at once, one asked
+// for and one arriving on the stream, and the older of the two may land last.
+func TestTrackerRefusesSnapshotBehindBook(t *testing.T) {
+	e := newExchange(31)
+	old := e.snapshot()
+
+	tr := NewTracker(testSymbol, 0)
+	tr.BeginFetch()
+	for range 10 {
+		e.next()
+	}
+	if err := tr.Load(e.snapshot()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for range 5 {
+		if st, err := tr.Apply(e.next()); err != nil || st != StatusApplied {
+			t.Fatalf("Apply = %v, %v", st, err)
+		}
+	}
+	current := e.snapshot()
+	lastID := tr.LastID()
+
+	if err := tr.Load(old); !errors.Is(err, ErrSnapshotBehind) {
+		t.Fatalf("Load of an older snapshot = %v, want %v", err, ErrSnapshotBehind)
+	}
+	if !tr.Live() {
+		t.Error("a refused snapshot took the book out of sync")
+	}
+	if tr.LastID() != lastID {
+		t.Errorf("LastID() = %d after a refused snapshot, want %d", tr.LastID(), lastID)
+	}
+	assertMatches(t, tr.Book(), current)
+
+	// A book that needs a resync takes the same snapshot: its contents are
+	// not to be trusted anyway, and the replay decides whether it bridges.
+	tr.seq.Invalidate()
+	if err := tr.Load(old); err != nil {
+		t.Errorf("Load of an older snapshot into a stale book = %v, want it accepted", err)
+	}
+}
+
 func TestStatusString(t *testing.T) {
 	for _, tt := range []struct {
 		s    Status
