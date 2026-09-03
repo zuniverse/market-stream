@@ -295,3 +295,68 @@ func TestQueryDuringLiveUpdates(t *testing.T) {
 	}
 	t.Logf("stats: %+v, views checked: %d", st, answered.Load())
 }
+
+// TestCheckComparesAgainstVenue drives the correctness harness the way ingestd
+// does: fetch a fresh snapshot, hand it to the shard that owns the book, and
+// read back the divergence report.
+func TestCheckComparesAgainstVenue(t *testing.T) {
+	syms := testSymbols(2)
+	v := newVenue(syms, 67)
+	r := newTestRouter(t, RouterConfig{Shards: 2, QueueCap: 8, Snapshots: v})
+	ctx := context.Background()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer r.Close()
+
+	rng := rand.New(rand.NewSource(67))
+	const perSymbol = 50
+	for range perSymbol {
+		for _, sym := range syms {
+			if err := r.Route(ctx, model.Event{Kind: model.KindBookDelta, BookDelta: v.next(sym, rng)}); err != nil {
+				t.Fatalf("Route: %v", err)
+			}
+		}
+	}
+	// Both conditions are needed. A snapshot anchors the book, but a delta
+	// still queued is a delta the venue has already applied, and comparing
+	// then reports a divergence at a skew of one that is the test's own
+	// timing rather than a defect.
+	waitFor(t, "the books to sync and the queues to drain", func() bool {
+		st := r.Stats()
+		return st.Snapshots == uint64(len(syms)) && st.Events == uint64(perSymbol*len(syms))
+	})
+
+	for _, sym := range syms {
+		diff, err := r.Check(ctx, v.state(sym))
+		if err != nil {
+			t.Fatalf("Check %s: %v", sym, err)
+		}
+		if !diff.OK() {
+			t.Errorf("%s: %v", sym, diff)
+		}
+		if !diff.Live || diff.Compared == 0 {
+			t.Errorf("%s: nothing was actually compared: %+v", sym, diff)
+		}
+	}
+
+	// A snapshot that has moved on must be reported rather than smoothed over.
+	sym := syms[0]
+	for range 5 {
+		v.next(sym, rng) // the venue advances, the book is not told
+	}
+	diff, err := r.Check(ctx, v.state(sym))
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if diff.OK() {
+		t.Error("Check agreed with a book that had missed five updates")
+	}
+	if diff.IDSkew() <= 0 {
+		t.Errorf("IDSkew() = %d, want the snapshot ahead of the book", diff.IDSkew())
+	}
+
+	if _, err := r.Check(ctx, model.Snapshot{Symbol: "NOPE-USDT"}); !errors.Is(err, ErrUnknownSymbol) {
+		t.Errorf("Check for an untracked symbol = %v, want %v", err, ErrUnknownSymbol)
+	}
+}

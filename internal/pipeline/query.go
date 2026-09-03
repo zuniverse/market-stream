@@ -65,6 +65,12 @@ type query struct {
 	symbol model.Symbol
 	depth  int
 
+	// check, when set, asks for a comparison against this snapshot instead of
+	// a view. The comparison has to run on the owning goroutine: it reads the
+	// book, and it needs the edges of what that book knows, which live in the
+	// tracker and are not part of any view (D28).
+	check *model.Snapshot
+
 	// reply has capacity 1 and exactly one value is ever sent on it, so the
 	// shard's send cannot block even when the caller has already given up
 	// and stopped listening.
@@ -73,6 +79,7 @@ type query struct {
 
 type queryResult struct {
 	view BookView
+	diff book.Diff
 	err  error
 }
 
@@ -91,22 +98,41 @@ type queryResult struct {
 // Query is valid between Start and Close, and is safe to call from any number
 // of goroutines at once.
 func (r *Router) Query(ctx context.Context, symbol model.Symbol, depth int) (BookView, error) {
-	s := r.shards[shardIndex(symbol, len(r.shards))]
-	q := query{symbol: symbol, depth: depth, reply: make(chan queryResult, 1)}
+	res, err := r.ask(ctx, query{symbol: symbol, depth: depth})
+	return res.view, err
+}
+
+// Check compares the book against snap and reports every price at which they
+// disagree, together with the update id of each (D28). It is the correctness
+// harness: a fresh snapshot is the only external truth about a book that has
+// been maintained from deltas for hours.
+//
+// The comparison runs on the goroutine that owns the book, for the same
+// reason a read does, and the caller fetches the snapshot itself so that the
+// cost of a full-depth request stays a decision the caller makes.
+func (r *Router) Check(ctx context.Context, snap model.Snapshot) (book.Diff, error) {
+	res, err := r.ask(ctx, query{symbol: snap.Symbol, check: &snap})
+	return res.diff, err
+}
+
+// ask sends q to the shard that owns its symbol and waits for the answer.
+func (r *Router) ask(ctx context.Context, q query) (queryResult, error) {
+	q.reply = make(chan queryResult, 1)
+	s := r.shards[shardIndex(q.symbol, len(r.shards))]
 
 	select {
 	case s.queries <- q:
 	case <-s.quit:
-		return BookView{}, fmt.Errorf("query %s: %w", symbol, ErrRouterClosed)
+		return queryResult{}, fmt.Errorf("query %s: %w", q.symbol, ErrRouterClosed)
 	case <-ctx.Done():
-		return BookView{}, fmt.Errorf("query %s: %w", symbol, ctx.Err())
+		return queryResult{}, fmt.Errorf("query %s: %w", q.symbol, ctx.Err())
 	}
 
 	select {
 	case res := <-q.reply:
-		return res.view, res.err
+		return res, res.err
 	case <-ctx.Done():
-		return BookView{}, fmt.Errorf("query %s: %w", symbol, ctx.Err())
+		return queryResult{}, fmt.Errorf("query %s: %w", q.symbol, ctx.Err())
 	}
 }
 
@@ -116,6 +142,11 @@ func (s *shard) answer(q query) {
 	t, ok := s.books[q.symbol]
 	if !ok {
 		q.reply <- queryResult{err: fmt.Errorf("shard %d: %s: %w", s.id, q.symbol, ErrUnknownSymbol)}
+		return
+	}
+	if q.check != nil {
+		diff, err := t.Compare(*q.check)
+		q.reply <- queryResult{diff: diff, err: err}
 		return
 	}
 	b := t.Book()

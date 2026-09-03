@@ -25,6 +25,12 @@ leave a hole between the two that no capture can show. The pair is what makes
 the M2.3 classification testable against something other than my reading of
 the documentation.
 
+The combined stream envelope, `{"stream":...,"data":...}`, is not captured.
+Where a test needs one it wraps a captured payload in it at the point of use
+rather than storing a wrapped copy, so the part that could be wrong about the
+wire, the payload, stays evidence. The wrapper itself is written from the
+documented shape.
+
 The three hand-written fixtures predate this and are not a paired capture.
 Their format is confirmed correct against the captured bytes: the same keys,
 the same eight-digit decimal padding, the same `"0.00000000"` for a deletion.

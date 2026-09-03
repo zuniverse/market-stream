@@ -141,6 +141,19 @@ never blocks the shard.
 Done when: a test issues concurrent queries during live updates, the race
 detector stays clean, and no lock has been introduced on book state.
 
+#### M2.7 Wiring and operator surface
+
+Not in the original breakdown, and it should have been: the six steps above
+build a book stage that nothing runs. This step connects it to the exchange
+and to an operator.
+
+Combined websocket stream for every configured symbol, the depth snapshot
+client as the router's source of snapshots, the flag surface reconciled with
+D19, a `/metrics` endpoint, and the correctness harness on a ticker.
+
+Done when: the binary runs against the real feed with books that stay
+anchored, and an end-to-end test drives the whole chain against a fake venue.
+
 #### Correctness harness
 
 Not a step, but a requirement that spans the milestone: a long-running check

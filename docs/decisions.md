@@ -852,3 +852,111 @@ the stage tracks is not a read.
 any non-test file imports `sync` or `sync/atomic`. The rule that book state
 carries no lock is now mechanical rather than a matter of discipline, which is
 the same move D21 made for keeping exchange types out of `pipeline`.
+
+---
+
+## D32. One combined-stream connection, and the 100ms depth variant
+
+**Chosen:** `ingestd` opens a single websocket to the combined stream
+endpoint, `/stream?streams=`, subscribing to `@aggTrade` and `@depth@100ms`
+for every configured symbol. The decoder unwraps the
+`{"stream":...,"data":...}` envelope the endpoint adds, exactly once.
+
+**Rejected:** one connection per stream on the `/ws/<name>` endpoint, which is
+what M1.3 used. It needs no unwrapping and it multiplies the reconnection
+state, the backoff, and the goroutine count by twice the symbol count, for a
+feed that fits comfortably on one socket.
+
+**Rejected:** the `/ws` endpoint with a SUBSCRIBE message after connecting. It
+also fits on one socket, and it moves the subscription into the connection
+lifecycle: every reconnect has to replay it, and a reconnect that succeeds but
+whose subscribe is lost gives a live socket carrying nothing. The URL form
+cannot fail that way, because there is no state to restore.
+
+**Rejected:** unwrapping recursively, so that any depth of envelope decodes. A
+second wrapper is not something the endpoint produces, and recursion turns a
+malformed frame into unbounded work.
+
+**Chosen:** the 100ms depth variant rather than the 1000ms default. It is ten
+times the delta rate for the same book. That is the point: the sequencing and
+resync machinery is what this project exists to get right, and the faster
+stream is what puts it under load. Both variants carry the same contiguity
+guarantee on update ids.
+
+---
+
+## D33. The publisher is fed by the decoder, not by the book stage
+
+**Chosen, for now:** `ingestd` hands each decoded event to the router and then
+to the publisher. The two are siblings fed by the decode loop rather than a
+chain, so the diagram in `architecture.md` is not what the wiring does today.
+
+**Rejected:** the shards publishing onward, as the diagram has it. Every shard
+would then call `Publish`, which D20 requires to come from a single goroutine,
+so it needs either a fan-in stage or a concurrency-safe publisher. The fan-in
+is a channel and a goroutine that exist to preserve an ordering nobody
+consumes. The concurrency-safe publisher means reopening D20, which was
+settled for reasons that have not changed.
+
+**Rejected:** the shards writing to a bounded channel that a forwarder drains.
+It is the fan-in with a bound, and the bound is the problem: a full channel
+would either block a shard, which lets a slow subscriber apply backpressure to
+the book stage and is exactly what `architecture.md` forbids, or drop, which
+duplicates the publisher's own drop policy one stage early.
+
+**Why:** the book stage has nothing to add to the events passing through it.
+It consumes deltas and produces book state, and book state is read through the
+query path (D31), not published. Putting the publisher after it today would
+move events through an extra stage that changes none of them, at the cost of
+one of the two decisions above.
+
+**When this changes:** when a stage between the books and the subscribers
+produces events of its own. That is the aggregation stage: OHLCV bars and
+indicators are derived from book and trade state and are worth publishing.
+At that point the publisher moves behind it and gets a single producer for
+free, which is the shape the diagram describes.
+
+**Consequence to accept meanwhile:** a subscriber sees the decoder's view of
+the stream, not the book stage's. It cannot tell that a delta was discarded as
+stale or held during a resync. Nothing subscribes that would care yet, and the
+counters that do carry it are on the router.
+
+---
+
+## D34. The operator surface: flags, metrics, and the correctness check
+
+**Chosen:** the flag surface D19 committed to, realised exactly:
+`-symbols` (repeatable, normalised `BASE-QUOTE`), `-endpoint`, `-shards`
+(defaulting to `runtime.NumCPU()`), `-metrics-addr`. Three additions:
+`-rest-endpoint`, because instrument metadata and depth snapshots come from a
+different host than the stream and a test needs to point both somewhere else;
+`-summary-interval`; and `-check-interval`.
+
+**Chosen:** channel capacities are constants, not flags. `frameCap`,
+`shardQueueCap` and `subCap` are sized once against the observed rate. An
+operator who needs to change one needs a profile rather than a flag, and D19's
+argument for a small surface is that a flag is a commitment.
+
+**Chosen:** `/metrics` renders the Prometheus text format by hand. What is
+exposed today is counters and one gauge, three lines each. The client library
+would buy nothing yet beyond a dependency, and M6, which introduces the
+histograms, is where writing the format by hand stops being reasonable. The
+`http.Server` exists now, which is what `architecture.md` asks for: the future
+query API attaches to a server that is already in the process.
+
+**Rejected:** binding `-metrics-addr` to `:9090` by default. Localhost is the
+default that does not expose an endpoint on every interface because an
+operator did not read the flag list. Exposing it elsewhere is one flag away.
+
+**Chosen:** the correctness harness runs in `ingestd` on a ticker, fetching a
+fresh snapshot per symbol and comparing it through the owning shard (D28).
+Default interval five minutes; `0` disables it.
+
+**Why five minutes:** a full-depth snapshot weighs 250 against a per-IP budget
+of 6000 per minute (D25), so the check costs `250 * symbols` per interval.
+At five minutes and a handful of symbols that is a rounding error against the
+budget, and it is frequent enough that a book that went wrong is found in
+minutes rather than at the end of a run. A book that is not live is skipped
+rather than compared: it is missing updates by definition, and comparing it
+would report the whole book as divergent while saying nothing that the live
+flag does not already say.

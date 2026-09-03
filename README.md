@@ -12,8 +12,12 @@ profiling under sustained load.
 - Connects to the Binance public websocket feed (one exchange for v0.1)
 - Decodes and normalises trade and order book events
 - Reconstructs per-symbol order books with gap detection and automatic resync
-- Records raw frames for deterministic replay and profiling
+- Checks each book against a fresh exchange snapshot on a timer, and reports
+  any divergence
 - Exposes Prometheus metrics on `/metrics`
+
+Not built yet: raw frame recording and deterministic replay (M3), latency
+histograms (M6), and everything in the backlog.
 
 ## Design notes
 
@@ -43,15 +47,19 @@ go build -o bin/replay ./cmd/replay
 
 ## Observability
 
-Prometheus metrics are available on `http://localhost:9090/metrics` by default
-(`-metrics-addr` to override). Key indicators:
+Prometheus metrics are available on `http://127.0.0.1:9090/metrics` by default
+(`-metrics-addr` to override), alongside `/healthz`. Key indicators:
 
-| Metric                     | What it shows                                   |
-| -------------------------- | ----------------------------------------------- |
-| `tick_to_book_latency`     | Cumulative pipeline lag from exchange timestamp |
-| `pipeline_queue_depth`     | Saturation per stage                            |
-| `book_resync_total`        | Gap detections triggering a resync              |
-| `subscriber_dropped_total` | Messages dropped per slow subscriber            |
+| Metric                                  | What it shows                          |
+| --------------------------------------- | -------------------------------------- |
+| `market_stream_gaps_total`              | Holes detected in an update id sequence |
+| `market_stream_snapshots_total`         | Snapshots that anchored a book          |
+| `market_stream_check_divergences_total` | Checks that found a book to be wrong    |
+| `market_stream_shard_queue_depth`       | Saturation per shard                    |
+| `market_stream_subscriber_dropped_total`| Events dropped per slow subscriber      |
+
+The tick-to-book latency histogram, which is the primary health indicator, is
+M6 and is not exposed yet.
 
 ## Project layout
 

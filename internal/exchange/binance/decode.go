@@ -18,21 +18,43 @@ func NewDecoder(cache *InstrumentCache) *Decoder {
 	return &Decoder{cache: cache}
 }
 
-// Decode decodes f into a model.Event. Returns an error for unknown event
-// types or unknown symbols.
+// envelope is the outer shape of any frame. A connection subscribed to a
+// single stream sends the event itself, so Type is set. The combined stream
+// endpoint wraps each event, so Stream and Data are set instead and the event
+// is one level down.
+type envelope struct {
+	Type      string `json:"e"`
+	EventTime int64  `json:"E"` // exact match prevents "E" from colliding with "e" via case-insensitive fallback
+
+	Stream string          `json:"stream"`
+	Data   json.RawMessage `json:"data"`
+}
+
+// Decode decodes f into a model.Event, unwrapping the combined stream
+// envelope when there is one. Returns an error for unknown event types or
+// unknown symbols.
 func (d *Decoder) Decode(f Frame) (model.Event, error) {
-	var env struct {
-		Type      string `json:"e"`
-		EventTime int64  `json:"E"` // exact match prevents "E" from colliding with "e" via case-insensitive fallback
-	}
-	if err := json.Unmarshal(f.Data, &env); err != nil {
+	payload := f.Data
+	var env envelope
+	if err := json.Unmarshal(payload, &env); err != nil {
 		return model.Event{}, fmt.Errorf("binance: decode envelope: %w", err)
+	}
+	if len(env.Data) > 0 {
+		// Combined stream. Unwrap exactly once: a second wrapper is not
+		// something the endpoint produces, and recursing on the payload would
+		// turn a malformed frame into unbounded work.
+		stream := env.Stream
+		payload = env.Data
+		env = envelope{}
+		if err := json.Unmarshal(payload, &env); err != nil {
+			return model.Event{}, fmt.Errorf("binance: decode %s payload: %w", stream, err)
+		}
 	}
 	switch env.Type {
 	case "aggTrade":
-		return d.decodeAggTrade(f.Data)
+		return d.decodeAggTrade(payload)
 	case "depthUpdate":
-		return d.decodeDepthUpdate(f.Data)
+		return d.decodeDepthUpdate(payload)
 	default:
 		return model.Event{}, fmt.Errorf("binance: unknown event type %q", env.Type)
 	}
