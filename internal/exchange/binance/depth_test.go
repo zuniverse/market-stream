@@ -324,7 +324,7 @@ func TestDecodeCapturedDepthStream(t *testing.T) {
 
 	var prevLast int64
 	for i, data := range frames {
-		ev, err := dec.Decode(binance.Frame{Data: data, ReceivedAt: time.Now()})
+		ev, err := dec.Decode(model.Frame{Data: data, ReceivedAt: time.Now()})
 		if err != nil {
 			t.Fatalf("frame %d: Decode: %v", i, err)
 		}
@@ -370,7 +370,7 @@ func TestCapturedStreamStraddlesSnapshot(t *testing.T) {
 	dec := binance.NewDecoder(loadCache(t))
 	var stale, first, after int
 	for i, data := range capturedFrames(t) {
-		ev, err := dec.Decode(binance.Frame{Data: data})
+		ev, err := dec.Decode(model.Frame{Data: data})
 		if err != nil {
 			t.Fatalf("frame %d: %v", i, err)
 		}

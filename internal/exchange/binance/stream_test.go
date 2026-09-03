@@ -65,12 +65,12 @@ func TestDecodeCombinedStreamEnvelope(t *testing.T) {
 	}
 
 	for i, payload := range frames {
-		plain, err := dec.Decode(binance.Frame{Data: payload})
+		plain, err := dec.Decode(model.Frame{Data: payload})
 		if err != nil {
 			t.Fatalf("frame %d: decode unwrapped: %v", i, err)
 		}
 		wrapped := []byte(fmt.Sprintf(`{"stream":"btcusdt@depth@100ms","data":%s}`, payload))
-		got, err := dec.Decode(binance.Frame{Data: wrapped})
+		got, err := dec.Decode(model.Frame{Data: wrapped})
 		if err != nil {
 			t.Fatalf("frame %d: decode wrapped: %v", i, err)
 		}
@@ -99,7 +99,7 @@ func TestDecodeCombinedStreamErrors(t *testing.T) {
 		{"payload is wrapped twice", `{"stream":"a","data":{"stream":"b","data":{"e":"aggTrade","s":"BTCUSDT","p":"1.00000000","q":"1.00000000"}}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := dec.Decode(binance.Frame{Data: []byte(tc.data)}); err == nil {
+			if _, err := dec.Decode(model.Frame{Data: []byte(tc.data)}); err == nil {
 				t.Errorf("Decode accepted %s", tc.data)
 			}
 		})

@@ -960,3 +960,85 @@ minutes rather than at the end of a run. A book that is not live is skipped
 rather than compared: it is missing updates by definition, and comparing it
 would report the whole book as divergent while saying nothing that the live
 flag does not already say.
+
+---
+
+## D35. A recording holds snapshots and metadata, not only frames
+
+**Chosen:** a recording is a sequence of typed records: `KindFrame` for a raw
+websocket payload, `KindMeta` for the exchange's instrument metadata response,
+and `KindSnapshot` for a depth snapshot. One `KindMeta` is written at the head
+of every recording; snapshots are written as they are fetched.
+
+**Rejected:** recording only the websocket frames, which is what
+`architecture.md` describes. A book is not rebuilt from deltas alone: it is
+anchored on a REST snapshot (M2.4) and parsed with the decimal exponents from
+`exchangeInfo` (D16). A replay that fetched either from the network would
+produce a different book on every run, which defeats the one property the
+recorder exists to provide (D5). The done criterion for M3, byte-identical
+book state across two runs of one file, is unreachable without them.
+
+**Rejected:** fetching only the metadata live and recording the snapshots.
+`tickSize` changes rarely enough that it looks safe, and it makes a replay
+depend on a network and on the venue still listing the symbol a year later. A
+recording that needs the internet to be read is not an archive.
+
+**Chosen:** the snapshot record holds the normalised `model.Snapshot`, not the
+JSON body it was parsed from. It is the one record that is not raw bytes.
+
+**Why the exception:** D6 records raw frames so that the decoder stays inside
+the loop a profile measures, and the decoder that matters is the websocket
+one, which runs thousands of times a second. A depth snapshot is parsed once
+per resync. Keeping its parse outside the bench changes no measurement worth
+making, and it buys something substantial: a replay needs no exchange package,
+no instrument metadata and no venue-specific parser to rebuild a book, so
+`internal/record` stays exchange-agnostic and a recording made from Binance
+today can be replayed by a binary that no longer knows what Binance was.
+
+**Consequence:** the snapshot format is `internal/model`'s, so a change to
+`model.Snapshot` changes the file format. That is what `formatVersion` is for,
+and it is a real cost to weigh the next time that struct moves.
+
+---
+
+## D36. Recording format: length-prefixed records inside one zstd stream
+
+**Chosen:** a 8-byte header (`MSREC\0` plus a `uint16` version), then records
+of `kind uint8`, `receivedAt int64` in Unix nanoseconds, `length uint32`, and
+the payload. Little-endian throughout. The whole file, header included, goes
+through one zstd stream.
+
+**Rejected:** a self-describing encoding, JSON Lines or protobuf. JSON Lines
+would re-encode every payload as a quoted string, which is the one thing a
+raw-frame recorder must not do, and both add a schema to maintain for a
+format with three fields.
+
+**Rejected:** big-endian, on the "network byte order" convention. Every
+platform this runs on is little-endian, so it is the encoding that costs no
+byte swapping, and portability comes from `encoding/binary` naming the order
+rather than from which order was picked.
+
+**Chosen:** `github.com/klauspost/compress/zstd`, pinned to a version whose
+own `go` directive is 1.22, so that adding it does not raise this module's
+minimum toolchain. It is the only real choice: there is no zstd in the
+standard library, `architecture.md` and D9 both already commit to zstd, and
+gzip would trade a third of the ratio and most of the speed for removing a
+dependency that is pure Go and widely deployed.
+
+**Chosen:** the encoder and decoder both run with a concurrency of one. A
+multi-goroutine encoder splits its input into blocks whose boundaries depend
+on scheduling, so the same records can compress to different bytes on two
+runs. A reproducible file is easier to trust in a package whose purpose is
+reproducibility, and one goroutine is ample for a feed producing a few hundred
+kilobytes a second. It also keeps the `goleak` check honest, since both hold
+goroutines until they are closed.
+
+**Chosen:** a payload over 16 MiB is refused on write and on read. A corrupt
+or truncated file must not be able to ask for an arbitrary allocation, and no
+exchange payload comes close: a 5000-level depth snapshot is a few hundred
+kilobytes.
+
+**Chosen:** a file that ends inside a record is an error, not a clean end. A
+recording is written until the process stops, so a truncated tail is a fact
+about that run, and reporting it as end-of-file would make a short replay look
+complete.

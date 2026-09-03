@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/zuniverse/market-stream/internal/exchange/binance"
+	"github.com/zuniverse/market-stream/internal/model"
 )
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
@@ -38,7 +39,7 @@ func TestTransportReconnectsOnDrop(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	out := make(chan binance.Frame, 4)
+	out := make(chan model.Frame, 4)
 	tr := binance.NewTransport(wsURL(srv), out,
 		binance.WithInitialWait(time.Millisecond),
 		binance.WithMaxWait(10*time.Millisecond),
@@ -86,7 +87,7 @@ func TestTransportServerShutdown(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	out := make(chan binance.Frame, 4)
+	out := make(chan model.Frame, 4)
 	tr := binance.NewTransport(wsURL(srv), out,
 		binance.WithInitialWait(time.Millisecond),
 		binance.WithMaxWait(10*time.Millisecond),
@@ -136,7 +137,7 @@ func TestTransportResetsBackoffAfterHealthyConnection(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	out := make(chan binance.Frame, connections)
+	out := make(chan model.Frame, connections)
 	tr := binance.NewTransport(wsURL(srv), out,
 		binance.WithInitialWait(2*time.Millisecond),
 		binance.WithMaxWait(5*time.Second),

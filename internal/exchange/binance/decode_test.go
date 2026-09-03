@@ -81,7 +81,7 @@ func TestDecode(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ev, err := dec.Decode(binance.Frame{Data: fixture(t, tc.file)})
+			ev, err := dec.Decode(model.Frame{Data: fixture(t, tc.file)})
 			if err != nil {
 				t.Fatalf("Decode: %v", err)
 			}
@@ -107,7 +107,7 @@ func TestDecodeErrors(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := dec.Decode(binance.Frame{Data: tc.data})
+			_, err := dec.Decode(model.Frame{Data: tc.data})
 			if err == nil {
 				t.Error("expected error, got nil")
 			}

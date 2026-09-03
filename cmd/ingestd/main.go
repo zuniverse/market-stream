@@ -190,7 +190,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 		}()
 	}
 
-	frames := make(chan binance.Frame, frameCap)
+	frames := make(chan model.Frame, frameCap)
 	transport := binance.NewTransport(streamURL, frames)
 
 	// Owner: run. Exit: ctx cancelled, which is the only way Transport.Run

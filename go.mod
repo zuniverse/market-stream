@@ -6,3 +6,5 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	go.uber.org/goleak v1.3.0
 )
+
+require github.com/klauspost/compress v1.18.0

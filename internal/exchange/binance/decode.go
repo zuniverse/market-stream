@@ -33,7 +33,7 @@ type envelope struct {
 // Decode decodes f into a model.Event, unwrapping the combined stream
 // envelope when there is one. Returns an error for unknown event types or
 // unknown symbols.
-func (d *Decoder) Decode(f Frame) (model.Event, error) {
+func (d *Decoder) Decode(f model.Frame) (model.Event, error) {
 	payload := f.Data
 	var env envelope
 	if err := json.Unmarshal(payload, &env); err != nil {

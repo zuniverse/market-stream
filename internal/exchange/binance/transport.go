@@ -9,22 +9,16 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-)
 
-// Frame is a raw websocket message received from Binance with its arrival
-// time. Recording captures frames exactly as they arrive, before any
-// decoding, so that the decoder stays inside the measured loop (D6).
-type Frame struct {
-	Data       []byte
-	ReceivedAt time.Time
-}
+	"github.com/zuniverse/market-stream/internal/model"
+)
 
 // Transport maintains a persistent Binance websocket connection.
 // It reconnects with exponential backoff and jitter after any failure.
 // A serverShutdown frame triggers an immediate reconnect without a delay.
 type Transport struct {
 	url         string
-	out         chan<- Frame
+	out         chan<- model.Frame
 	initialWait time.Duration
 	maxWait     time.Duration
 }
@@ -44,7 +38,7 @@ func WithMaxWait(d time.Duration) Option {
 
 // NewTransport returns a Transport that dials url and sends received frames
 // to out. out must have a finite capacity; Transport never closes it.
-func NewTransport(url string, out chan<- Frame, opts ...Option) *Transport {
+func NewTransport(url string, out chan<- model.Frame, opts ...Option) *Transport {
 	t := &Transport{
 		url:         url,
 		out:         out,
@@ -126,7 +120,7 @@ func (t *Transport) runOnce(ctx context.Context) (delivered bool, err error) {
 			return delivered, errServerShutdown
 		}
 		select {
-		case t.out <- Frame{Data: data, ReceivedAt: time.Now()}:
+		case t.out <- model.Frame{Data: data, ReceivedAt: time.Now()}:
 			delivered = true
 		case <-ctx.Done():
 			return delivered, ctx.Err()
