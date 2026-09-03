@@ -65,12 +65,21 @@ func NewTransport(url string, out chan<- Frame, opts ...Option) *Transport {
 func (t *Transport) Run(ctx context.Context) error {
 	wait := t.initialWait
 	for {
-		err := t.runOnce(ctx)
+		delivered, err := t.runOnce(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if delivered {
+			// The connection lived long enough to carry data, so whatever
+			// ended it is a new failure rather than a continuation of the
+			// ones the backoff was counting. Without this, a socket that runs
+			// for six hours and then drops resumes at the wait the last
+			// outage climbed to, which is exactly the case where the venue is
+			// known to be reachable and waiting a minute is pure lost data.
+			wait = t.initialWait
+		}
 		if errors.Is(err, errServerShutdown) {
-			wait = t.initialWait // planned restart; reset backoff
+			wait = t.initialWait // planned restart; reconnect at once
 			continue
 		}
 		select {
@@ -83,11 +92,14 @@ func (t *Transport) Run(ctx context.Context) error {
 }
 
 // runOnce establishes one connection and reads frames until the connection
-// fails, ctx is cancelled, or a serverShutdown frame arrives.
-func (t *Transport) runOnce(ctx context.Context) error {
+// fails, ctx is cancelled, or a serverShutdown frame arrives. It reports
+// whether the connection delivered at least one frame, which is the signal
+// that it was healthy rather than merely accepted: a venue that is refusing
+// service can still complete a handshake and close.
+func (t *Transport) runOnce(ctx context.Context) (delivered bool, err error) {
 	ws, _, err := websocket.DefaultDialer.DialContext(ctx, t.url, nil)
 	if err != nil {
-		return fmt.Errorf("dial: %w", err)
+		return false, fmt.Errorf("dial: %w", err)
 	}
 
 	done := make(chan struct{})
@@ -106,17 +118,18 @@ func (t *Transport) runOnce(ctx context.Context) error {
 		_, data, err := ws.ReadMessage()
 		if err != nil {
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return delivered, ctx.Err()
 			}
-			return fmt.Errorf("read: %w", err)
+			return delivered, fmt.Errorf("read: %w", err)
 		}
 		if isServerShutdown(data) {
-			return errServerShutdown
+			return delivered, errServerShutdown
 		}
 		select {
 		case t.out <- Frame{Data: data, ReceivedAt: time.Now()}:
+			delivered = true
 		case <-ctx.Done():
-			return ctx.Err()
+			return delivered, ctx.Err()
 		}
 	}
 }
