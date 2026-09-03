@@ -567,3 +567,61 @@ and is why the flag exists before anything reads it.
 minute. Full-depth snapshots are therefore a bounded resource, and a resync
 storm across many symbols is the case to watch. The `limit` parameter on
 `NewDepthClient` exists so that this can be traded off without a code change.
+
+---
+
+## D26. Sequencing is a separate type, and one rule covers every delta
+
+**Chosen:** `book.Sequencer`, a small value beside `book.Book` rather than a
+field inside it. It holds the last applied update id and a synced flag, and
+`Next(delta)` returns `Stale`, `Contiguous`, or `Gapped` while advancing the
+position. The rule is two comparisons:
+
+- `u <= last` -- every id in the delta is already applied: `Stale`.
+- `U <= last+1` -- no id between the last applied and this one is missing:
+  `Contiguous`, and `last` becomes `u`.
+- otherwise a hole: `Gapped`, and the sequencer is marked unsynced until
+  `Reset` re-anchors it on a snapshot id.
+
+**Rejected:** putting the update ids in `Book` and having `Apply` reject
+out-of-sequence deltas. It reads as the obvious simplification and it welds
+two lifetimes together: the book is a container whose contents survive a
+resync, while the sequence position is discarded and rebuilt by one. It would
+also give `Apply` a second failure mode that is not an error, since a stale
+delta is normal traffic, not a fault.
+
+**Rejected:** treating the first delta after a snapshot as a special case, as
+the Binance documentation writes it (`U <= lastUpdateId+1 AND u >=
+lastUpdateId+1`). That condition is the general rule with the stale test
+already applied: `u > last` is exactly `u >= last+1`. Writing it separately
+means a `first` flag, a second code path, and a boundary where the two can
+disagree.
+
+**Rejected:** requiring `U == last+1` exactly for deltas after the first, and
+classifying an overlap as a gap. Depth deltas carry absolute quantities, not
+increments, so a delta restating a range that was already applied resolves to
+the same value at every price it mentions. Refusing it would force a resync to
+reach a state the book is already in.
+
+**Why:** the whole milestone exists because a wrong book does not crash, it
+lies. The classification is the one place where that can be decided, so it is
+worth having as a type that can be tested exhaustively on ids alone, with no
+book, no network, and no levels in the fixtures.
+
+The unified rule has a property worth stating: a malformed delta with `U > u`
+can never be classified `Contiguous`, because `u > last` and `U <= last+1`
+together imply `U <= u`. It falls out as `Stale` or `Gapped`, neither of which
+touches the book.
+
+**Consequence:** the zero value needs a resync. A sequencer that has never
+been given a snapshot id classifies every delta as `Gapped`, which is not
+literally a gap but calls for exactly the same response, and is what makes
+startup and recovery the same code path in M2.4.
+
+**Consequence:** `Next` advances as it classifies rather than being a pure
+predicate. That is deliberate: it makes it impossible to apply a delta to the
+book without recording that it was applied. The cost is that a caller whose
+`Apply` then fails validation has advanced the position over a delta that
+never reached the book. `Apply` only fails on levels that cannot exist, which
+is a decoding fault rather than a sequencing one, and the answer to it is a
+resync.

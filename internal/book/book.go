@@ -105,7 +105,8 @@ func (s *side) sorted(levels []model.Level) ([]model.Level, error) {
 //
 // It is a pure container: it applies level updates and answers reads, and
 // knows nothing about sequence numbers, snapshots over the wire, or
-// concurrency. Sequencing is added in M2.3 and ownership in M2.5.
+// concurrency. Update ids are the business of Sequencer, which decides what
+// reaches Apply; ownership is added in M2.5.
 //
 // A Book is not safe for concurrent use. It is owned by exactly one
 // goroutine, which is what lets the book state carry no mutex at all (D3).
