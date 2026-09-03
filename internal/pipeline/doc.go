@@ -24,6 +24,9 @@
 // this pipeline is worth the same, and the difference is meant to be visible
 // in the code rather than only in the architecture document.
 //
-// Nothing here reads a book yet. The query path that lets a caller read one
-// without taking a lock is M2.6.
+// Router.Query reads a book without taking a lock: the request carries the
+// channel it is answered on, and the owning shard answers it between two
+// deltas, handing back a copy (D4, D31). Nothing in the binaries calls it
+// yet. It exists first so that the seam is there before the pressure to take
+// the shortcut is.
 package pipeline

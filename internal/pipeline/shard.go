@@ -72,6 +72,7 @@ type Stats struct {
 	Refetches  uint64 // snapshots that landed too old to anchor one
 	FetchFails uint64 // snapshot requests that returned an error
 	Errors     uint64 // events a book refused
+	Queries    uint64 // book reads answered
 }
 
 // Router owns the book stage: it routes each event to the shard that owns
@@ -128,6 +129,7 @@ func NewRouter(cfg RouterConfig) (*Router, error) {
 			id:        i,
 			in:        make(chan model.Event, cfg.QueueCap),
 			results:   make(chan fetchResult),
+			queries:   make(chan query),
 			quit:      make(chan struct{}),
 			books:     make(map[model.Symbol]*book.Tracker),
 			bufferCap: cfg.BufferCap,
@@ -234,6 +236,7 @@ func (r *Router) Stats() Stats {
 		total.Refetches += s.refetches.Load()
 		total.FetchFails += s.fetchFails.Load()
 		total.Errors += s.errors.Load()
+		total.Queries += s.answered.Load()
 	}
 	return total
 }
@@ -290,6 +293,12 @@ type shard struct {
 	// since it holds nothing the shard needs.
 	results chan fetchResult
 
+	// queries carries book reads, each with the channel to answer on.
+	// Unbuffered, so there is no queue to size and no queued request left
+	// unanswered at shutdown: a caller waits exactly until the shard takes
+	// its request, or until it gives up (D31).
+	queries chan query
+
 	// quit is closed by the shard goroutine as it returns, so a fetch still
 	// in flight at shutdown does not block forever on a send to results.
 	quit chan struct{}
@@ -315,12 +324,19 @@ type shard struct {
 	refetches  atomic.Uint64
 	fetchFails atomic.Uint64
 	errors     atomic.Uint64
+	answered   atomic.Uint64
 }
 
 // run is the shard loop. It exits when its input channel is closed, having
 // drained whatever was queued.
 func (s *shard) run(ctx context.Context) {
+	// Closing quit releases every caller still parked: a fetch goroutine with
+	// nowhere to deliver its result, and a query whose request was never
+	// taken. Because the query channel is unbuffered, a request that was
+	// taken is one this loop is already answering, so nothing can be left
+	// waiting for an answer that will not come.
 	defer close(s.quit)
+
 	for {
 		select {
 		case ev, ok := <-s.in:
@@ -330,6 +346,8 @@ func (s *shard) run(ctx context.Context) {
 			s.handle(ctx, ev)
 		case res := <-s.results:
 			s.complete(ctx, res)
+		case q := <-s.queries:
+			s.answer(q)
 		}
 	}
 }

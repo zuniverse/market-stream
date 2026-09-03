@@ -801,3 +801,54 @@ backoff. The one-request-per-symbol rule already bounds the rate, and a
 per-symbol backoff schedule is state to keep, to reset, and to get wrong.
 Worth revisiting only if a resync storm is ever observed, per the
 no-optimisation-without-a-measurement rule.
+
+---
+
+## D31. A book read is a message with its reply channel inside
+
+**Chosen:** `Router.Query` builds a request holding the symbol, the depth
+wanted, and a reply channel of capacity 1, sends it on the owning shard's
+query channel, and waits for the answer. The shard answers it in its main
+loop, between two deltas, with a `BookView`: a copy of the levels and the
+state of the book at that moment. The query channel is unbuffered.
+
+**Rejected:** a `sync.RWMutex` on book state so a handler can read directly.
+D4 settled this before there was anything to read; what M2.6 adds is the
+seam, deliberately built before the first caller exists, because the caller is
+what creates the pressure to take the shortcut.
+
+**Rejected:** returning the `*book.Book`, or a view holding its internal
+slices. It is the allocation-free version and it hands another goroutine a
+pointer into state the shard keeps mutating, which is a data race by
+construction. `Book.Bids` and `Book.Asks` have copied since M2.1 for exactly
+this moment.
+
+**Rejected:** a buffered query channel. The buffer would be a queue of
+requests that the shard may never reach, which has to be sized, and which at
+shutdown holds requests whose callers are still waiting. Unbuffered means a
+successful send is one the loop has already taken, so the only two outcomes
+are an answer and a release, and the release comes free from the `quit`
+channel the fetch goroutines already use.
+
+**Why:** the reply channel travelling inside the request is what makes the
+answer belong to one caller. The shard needs no table of who asked what, and
+because the channel has capacity 1 and carries exactly one value, the shard's
+send cannot block even when the caller has already given up and stopped
+listening. A caller that abandons a query therefore costs the shard nothing,
+which is the requirement the milestone states.
+
+**Consequence:** the shard loop selects over three channels, and a `select`
+with several ready cases picks at random. Queries are therefore served
+between deltas at a fair share rather than after the backlog, which is the
+behaviour a health check wants. It also means a flood of queries competes with
+the delta stream, which is acceptable while queries are rare and would need a
+priority scheme if that ever stopped being true.
+
+**Consequence:** a query never creates a book. An unknown symbol is
+`ErrUnknownSymbol` rather than an empty book, because a read that changes what
+the stage tracks is not a read.
+
+**Enforcement:** `TestPackageTakesNoLocks` parses `internal/book` and fails if
+any non-test file imports `sync` or `sync/atomic`. The rule that book state
+carries no lock is now mechanical rather than a matter of discipline, which is
+the same move D21 made for keeping exchange types out of `pipeline`.
