@@ -1253,3 +1253,91 @@ not superseded. It is annotated, and the item is third on the list in
 that a later session does not re-propose them. That only works if the reasons
 are true. A wrong reason left in place is worse than no reason: it makes the
 wrong thing look already settled.
+
+---
+
+## D42. The decoder locates two fields by scanning instead of unmarshalling
+
+**Chosen:** `Decode` finds the combined-stream `"data"` wrapper and the event
+type `"e"` with a small scanner over the raw bytes (`jsonscan.go`), and hands
+only the payload to `encoding/json`. One validating parse per frame instead of
+three.
+
+**What the profile said (M4):** `json.Unmarshal` runs `checkValid` over the
+entire input before it walks it, and `Decode` did that twice before the
+payload was parsed a third time. The envelope parse, which reads exactly two
+fields, was 55% of the cost of decoding. `checkValid` alone was 25% of the
+whole pipeline's CPU.
+
+**Measured effect**, `benchstat` over six runs of each, on the committed
+reference corpus:
+
+```
+                    │   before    │               after                │
+                    │   sec/op    │   sec/op     vs base               │
+DecodeMixed-8         24.56µ ± 4%   13.39µ ± 5%  -45.47% (p=0.002 n=6)
+DecodeAggTrade-8      8.491µ ± 4%   3.653µ ± 3%  -56.98% (p=0.002 n=6)
+DecodeDepthUpdate-8   46.17µ ± 5%   27.68µ ± 5%  -40.04% (p=0.002 n=6)
+ParseDepth-8          28.51µ ± 8%   28.83µ ± 4%        ~ (p=0.589 n=6)
+
+                    │  allocs/op  │ allocs/op   vs base                │
+DecodeMixed-8          54.00 ± 0%   42.00 ± 0%  -22.22% (p=0.002 n=6)
+```
+
+`ParseDepth` is the control: it does not go through `Decode` and did not
+move, which is what says the difference is the change rather than the day.
+
+End to end, replaying the reference: **489 ms to 293 ms**, about 18,000 to
+29,000 frames per second. In the profile, decoding fell from 56.6% to 42.5%
+and `checkValid` from 25.0% to 16.9%. Both profiles are committed.
+
+**Rejected:** one `Unmarshal` into a union struct holding the fields of both
+event types. It would have removed a parse without any hand-written code, and
+it does not work: `"a"` is the aggregate trade id on `aggTrade` and the ask
+levels on `depthUpdate`, a number and an array under one key. Decoding it as
+`json.RawMessage` and parsing it again afterwards puts the parse back where it
+was removed from.
+
+**Rejected:** a third-party JSON library. It is the larger change, it is a
+dependency on the hottest path in the system, and it does not address the
+actual finding, which is not that `encoding/json` is slow but that the frame
+was being parsed three times. Worth revisiting for the remaining payload
+parse, with its own measurement, not as part of this.
+
+**Rejected:** keeping `encoding/json` and accepting the cost, on D8's
+argument that a hand-written scanner is harder to maintain and easier to get
+subtly wrong. D8 does not forbid one; it requires a profile and a measured
+figure, and both are above. What it does require is that the scanner be worth
+its maintenance, so the code is deliberately not a JSON parser: it locates one
+key's raw value at the top level of an object and gives up whenever it is not
+sure. Nothing trusts its output, because the span it returns goes to
+`encoding/json`, which validates it. A frame the scanner reads wrongly fails
+to decode rather than decoding into something wrong.
+
+**How it is checked:** a table of shapes, a differential test that runs both
+implementations over all 8764 captured frames and requires the same answer for
+both keys, and a fuzz target asserting the same property, run to 2.28 million
+executions clean. The fuzzer found three real edge cases, all now documented
+rather than fixed, because each is a place where agreeing with `encoding/json`
+would cost more than it is worth:
+
+- On input that is not valid JSON the scanner may return a span that is not
+  valid JSON either. Safe: the payload parse rejects it.
+- On duplicate keys it takes the first and `encoding/json` takes the last.
+  No venue sends duplicates, and taking the last would mean scanning the whole
+  object every time.
+- A key spelled with an escape, `"e"` for `"e"`, is not found, because
+  keys are compared as written. The failure direction is right: the frame is
+  refused rather than misread.
+
+**A bug removed on the way.** `encoding/json` falls back to case-insensitive
+field matching, so a struct with a field tagged `"e"` and no home for `"E"`
+unmarshals the event time, a number, into the event type, a string, and fails.
+The old decoder carried a decoy `Discard int64` field to prevent exactly that.
+The scanner matches exactly, so the workaround is gone. The hazard is real
+enough that it reappeared in the first draft of the new test, which is why the
+decoy is documented there too.
+
+**Consequence:** `docs/baseline.md` now describes code that no longer exists.
+It says so at the top and is otherwise left alone: a baseline that is edited
+to match the present is not a baseline.

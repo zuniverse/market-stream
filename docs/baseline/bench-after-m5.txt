@@ -1,0 +1,30 @@
+goos: linux
+goarch: amd64
+pkg: github.com/zuniverse/market-stream/internal/exchange/binance
+cpu: Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz
+BenchmarkDecodeMixed-8         	   92688	     13020 ns/op	  47.39 MB/s	    2271 B/op	      42 allocs/op
+BenchmarkDecodeMixed-8         	   88506	     13719 ns/op	  44.97 MB/s	    2268 B/op	      42 allocs/op
+BenchmarkDecodeMixed-8         	   86136	     13572 ns/op	  45.46 MB/s	    2267 B/op	      42 allocs/op
+BenchmarkDecodeMixed-8         	   91741	     12948 ns/op	  47.65 MB/s	    2269 B/op	      42 allocs/op
+BenchmarkDecodeMixed-8         	   82074	     14123 ns/op	  43.69 MB/s	    2270 B/op	      42 allocs/op
+BenchmarkDecodeMixed-8         	   81642	     13211 ns/op	  46.70 MB/s	    2268 B/op	      42 allocs/op
+BenchmarkDecodeAggTrade-8      	  304388	      3632 ns/op	  55.90 MB/s	     344 B/op	      10 allocs/op
+BenchmarkDecodeAggTrade-8      	  308328	      3717 ns/op	  54.62 MB/s	     344 B/op	      10 allocs/op
+BenchmarkDecodeAggTrade-8      	  291853	      3539 ns/op	  57.35 MB/s	     344 B/op	      10 allocs/op
+BenchmarkDecodeAggTrade-8      	  352016	      3608 ns/op	  56.26 MB/s	     344 B/op	      10 allocs/op
+BenchmarkDecodeAggTrade-8      	  340738	      3674 ns/op	  55.25 MB/s	     344 B/op	      10 allocs/op
+BenchmarkDecodeAggTrade-8      	  348807	      3685 ns/op	  55.09 MB/s	     344 B/op	      10 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   43068	     27610 ns/op	  43.61 MB/s	    5010 B/op	      87 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   42897	     27753 ns/op	  43.38 MB/s	    5010 B/op	      87 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   44439	     26357 ns/op	  45.68 MB/s	    5005 B/op	      87 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   40233	     26988 ns/op	  44.61 MB/s	    5002 B/op	      87 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   43300	     28292 ns/op	  42.56 MB/s	    5004 B/op	      87 allocs/op
+BenchmarkDecodeDepthUpdate-8   	   38232	     28580 ns/op	  42.13 MB/s	    5032 B/op	      88 allocs/op
+BenchmarkParseDepth-8          	   41421	     27693 ns/op	  47.88 MB/s	    6536 B/op	     101 allocs/op
+BenchmarkParseDepth-8          	   42328	     29136 ns/op	  45.51 MB/s	    6536 B/op	     101 allocs/op
+BenchmarkParseDepth-8          	   42939	     28838 ns/op	  45.98 MB/s	    6536 B/op	     101 allocs/op
+BenchmarkParseDepth-8          	   39958	     29067 ns/op	  45.62 MB/s	    6536 B/op	     101 allocs/op
+BenchmarkParseDepth-8          	   40258	     28824 ns/op	  46.00 MB/s	    6536 B/op	     101 allocs/op
+BenchmarkParseDepth-8          	   43101	     28387 ns/op	  46.71 MB/s	    6536 B/op	     101 allocs/op
+PASS
+ok  	github.com/zuniverse/market-stream/internal/exchange/binance	42.095s

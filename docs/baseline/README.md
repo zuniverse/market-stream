@@ -45,6 +45,9 @@ was logged five seconds before the run ended.
 `cpu.pprof` and `heap.pprof` come from `cmd/replay` over this file. See
 `../baseline.md` for how they were taken and what they say.
 
+`cpu-after-m5.pprof` is the same run after the M5 decoder change, kept beside
+the baseline so the shift can be seen rather than described (D42).
+
 ```sh
 go tool pprof -http=: docs/baseline/cpu.pprof
 ```
@@ -62,3 +65,13 @@ benchstat docs/baseline/bench.txt after.txt
 
 Six runs rather than one, because a single measurement has no variance to
 report and `benchstat` will not tell you whether a change is a change.
+
+`bench-after-m5.txt` is the decoder package re-run after M5, in the same
+format:
+
+```sh
+benchstat before=docs/baseline/bench.txt after=docs/baseline/bench-after-m5.txt
+```
+
+`bench.txt` stays frozen at the M4 numbers. It is the reference every later
+change is measured against, so it is never regenerated in place.

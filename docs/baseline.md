@@ -1,5 +1,13 @@
 # Measurement baseline
 
+> **This describes the code as of M4, before any optimisation.** M5 acted on
+> the first item at the bottom of this page and the shape changed: decoding
+> fell from 56.6% of the profile to 42.5% and end-to-end throughput went from
+> ~18,000 to ~29,000 frames per second. The numbers below are kept as written
+> because they are the baseline every later change is measured against. See
+> D42 for what changed and `baseline/cpu-after-m5.pprof` for the profile that
+> replaced this one.
+
 What the pipeline costs before anything has been optimised, and where the
 cost is. Nothing here is acted on: M4 records, M5 acts, and an optimisation
 that cannot point at a line of this document has no evidence behind it.

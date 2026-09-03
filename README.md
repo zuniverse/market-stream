@@ -33,10 +33,10 @@ rejected alternatives. [docs/baseline.md](docs/baseline.md) is where the
 performance claims are, with the profiles they came from committed beside
 them.
 
-Measured on the committed reference recording: about 18,000 frames per second
-end to end, of which roughly two thirds is `encoding/json` decoding. Nothing
-has been optimised yet, deliberately: the baseline exists so that the first
-optimisation can be shown to be one.
+Measured on the committed reference recording: about 29,000 frames per second
+end to end. Decoding is still the largest single cost at 42% of the profile,
+down from 57% before the one optimisation made so far, which is recorded with
+its `benchstat` comparison as D42.
 
 ## Usage
 

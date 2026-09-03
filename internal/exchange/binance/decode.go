@@ -18,45 +18,42 @@ func NewDecoder(cache *InstrumentCache) *Decoder {
 	return &Decoder{cache: cache}
 }
 
-// envelope is the outer shape of any frame. A connection subscribed to a
-// single stream sends the event itself, so Type is set. The combined stream
-// endpoint wraps each event, so Stream and Data are set instead and the event
-// is one level down.
-type envelope struct {
-	Type      string `json:"e"`
-	EventTime int64  `json:"E"` // exact match prevents "E" from colliding with "e" via case-insensitive fallback
-
-	Stream string          `json:"stream"`
-	Data   json.RawMessage `json:"data"`
-}
-
 // Decode decodes f into a model.Event, unwrapping the combined stream
 // envelope when there is one. Returns an error for unknown event types or
 // unknown symbols.
+//
+// The two fields that decide what to do, the combined-stream "data" wrapper
+// and the event type "e", are located by scanning rather than by unmarshalling
+// (see jsonscan.go). Reading them with encoding/json meant validating and
+// walking the whole frame twice before the payload was decoded a third time,
+// which the M4 profile showed was more than half the cost of decoding (D42).
+//
+// The payload itself still goes through encoding/json, so anything the
+// scanner got wrong fails here rather than becoming a wrong event.
 func (d *Decoder) Decode(f model.Frame) (model.Event, error) {
 	payload := f.Data
-	var env envelope
-	if err := json.Unmarshal(payload, &env); err != nil {
-		return model.Event{}, fmt.Errorf("binance: decode envelope: %w", err)
-	}
-	if len(env.Data) > 0 {
+	var stream string
+	if data, ok := fieldValue(payload, "data"); ok {
 		// Combined stream. Unwrap exactly once: a second wrapper is not
 		// something the endpoint produces, and recursing on the payload would
 		// turn a malformed frame into unbounded work.
-		stream := env.Stream
-		payload = env.Data
-		env = envelope{}
-		if err := json.Unmarshal(payload, &env); err != nil {
-			return model.Event{}, fmt.Errorf("binance: decode %s payload: %w", stream, err)
-		}
+		stream, _ = stringField(payload, "stream")
+		payload = data
 	}
-	switch env.Type {
+	typ, ok := stringField(payload, "e")
+	if !ok {
+		if stream != "" {
+			return model.Event{}, fmt.Errorf("binance: %s payload carries no event type", stream)
+		}
+		return model.Event{}, fmt.Errorf("binance: frame carries no event type")
+	}
+	switch typ {
 	case "aggTrade":
 		return d.decodeAggTrade(payload)
 	case "depthUpdate":
 		return d.decodeDepthUpdate(payload)
 	default:
-		return model.Event{}, fmt.Errorf("binance: unknown event type %q", env.Type)
+		return model.Event{}, fmt.Errorf("binance: unknown event type %q", typ)
 	}
 }
 
