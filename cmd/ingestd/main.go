@@ -130,7 +130,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 	// decoder, decimal exponents in the log subscriber, and the reverse
 	// lookup that builds the stream URL and the depth requests (D16).
 	httpClient := &http.Client{Timeout: 10 * time.Second}
-	metaBody, err := binance.FetchExchangeInfoRaw(ctx, httpClient, cfg.restEndpoint)
+	metaBody, err := binance.FetchExchangeInfoRaw(ctx, httpClient, cfg.restEndpoint, cfg.symbols)
 	if err != nil {
 		return err
 	}

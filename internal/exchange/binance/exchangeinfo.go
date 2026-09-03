@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/zuniverse/market-stream/internal/model"
@@ -119,12 +120,29 @@ func ParseExchangeInfo(data []byte) (*InstrumentCache, error) {
 
 // FetchExchangeInfo fetches /api/v3/exchangeInfo from baseURL and returns a
 // parsed InstrumentCache. baseURL should not include a trailing slash.
-func FetchExchangeInfo(ctx context.Context, client *http.Client, baseURL string) (*InstrumentCache, error) {
-	body, err := FetchExchangeInfoRaw(ctx, client, baseURL)
+//
+// symbols restricts the response to those instruments; nil asks for every
+// instrument the venue lists, which on Binance spot is over seventeen
+// megabytes of JSON.
+func FetchExchangeInfo(ctx context.Context, client *http.Client, baseURL string, symbols []model.Symbol) (*InstrumentCache, error) {
+	body, err := FetchExchangeInfoRaw(ctx, client, baseURL, symbols)
 	if err != nil {
 		return nil, err
 	}
 	return ParseExchangeInfo(body)
+}
+
+// rawSymbolName returns the exchange's own spelling of a normalised symbol:
+// Binance spot concatenates the base and quote assets, so "BTC-USDT" is
+// "BTCUSDT".
+//
+// This is the safe direction of the conversion, and the only one available
+// before there is a cache to ask: it is what builds the request that creates
+// the cache. Splitting the other way needs to know where the boundary is,
+// which is why D16 fetches the authoritative split rather than guessing at a
+// suffix. Joining needs no such knowledge.
+func rawSymbolName(sym model.Symbol) string {
+	return strings.ReplaceAll(string(sym), "-", "")
 }
 
 // FetchExchangeInfoRaw fetches /api/v3/exchangeInfo and returns the response
@@ -134,8 +152,24 @@ func FetchExchangeInfo(ctx context.Context, client *http.Client, baseURL string)
 // rebuild the instrument metadata without a network (D35). It is the raw
 // bytes rather than the parsed cache because the cache is this package's
 // type, and a recording must not carry one.
-func FetchExchangeInfoRaw(ctx context.Context, client *http.Client, baseURL string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/v3/exchangeInfo", nil)
+func FetchExchangeInfoRaw(ctx context.Context, client *http.Client, baseURL string, symbols []model.Symbol) ([]byte, error) {
+	endpoint := baseURL + "/api/v3/exchangeInfo"
+	if len(symbols) > 0 {
+		// The parameter is a JSON array of exchange symbols, which is what
+		// the endpoint documents. Asking for the instruments actually being
+		// ingested turns a seventeen megabyte response into a few kilobytes,
+		// and the recorder writes that response into every hourly file.
+		raw := make([]string, len(symbols))
+		for i, sym := range symbols {
+			raw[i] = rawSymbolName(sym)
+		}
+		list, err := json.Marshal(raw)
+		if err != nil {
+			return nil, fmt.Errorf("binance: build exchangeInfo request: %w", err)
+		}
+		endpoint += "?symbols=" + url.QueryEscape(string(list))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("binance: build exchangeInfo request: %w", err)
 	}

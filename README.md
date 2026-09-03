@@ -14,10 +14,13 @@ profiling under sustained load.
 - Reconstructs per-symbol order books with gap detection and automatic resync
 - Checks each book against a fresh exchange snapshot on a timer, and reports
   any divergence
+- Records raw frames, snapshots and instrument metadata for deterministic
+  replay with no network
 - Exposes Prometheus metrics on `/metrics`
 
-Not built yet: raw frame recording and deterministic replay (M3), latency
-histograms (M6), and everything in the backlog.
+Not built yet: the measurement baseline and its profiles (M4), the
+optimisation pass (M5), latency histograms (M6), and everything in the
+backlog.
 
 ## Design notes
 
@@ -38,12 +41,27 @@ go build -o bin/ingestd ./cmd/ingestd
 
 Run `./bin/ingestd -help` for the full flag list.
 
-## Replay
+## Recording and replay
+
+```sh
+./bin/ingestd -symbols BTC-USDT -record-dir ./recordings
+```
+
+Recordings are hourly zstd files. Each one carries the instrument metadata and
+the depth snapshots as well as the raw frames, so a replay needs no network
+and no venue.
 
 ```sh
 go build -o bin/replay ./cmd/replay
-./bin/replay -file path/to/recording.zst
+./bin/replay -out books.txt ./recordings/2026-09-03T13.msr.zst
 ```
+
+`replay` runs the recording through the same pipeline the daemon uses and
+writes the resulting book state. Two runs of one file produce the same bytes,
+which is what makes a before-and-after comparison of an optimisation mean
+anything. `-speed 1` replays in real time; the default replays as fast as the
+pipeline will take the frames, which measures maximum throughput and
+saturation rather than a realistic load shape.
 
 ## Observability
 

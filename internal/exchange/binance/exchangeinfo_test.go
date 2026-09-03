@@ -1,6 +1,9 @@
 package binance_test
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -75,5 +78,44 @@ func TestParseExchangeInfo_MissingFilter(t *testing.T) {
 	_, err := binance.ParseExchangeInfo(data)
 	if err == nil {
 		t.Error("expected error when PRICE_FILTER is absent")
+	}
+}
+
+// TestFetchExchangeInfoFiltersSymbols pins the request the client makes. The
+// unfiltered response on Binance spot is over seventeen megabytes, which is
+// past the recorder's per-record limit and goes into every hourly file, so
+// asking for only the instruments being ingested is not an optimisation.
+func TestFetchExchangeInfoFiltersSymbols(t *testing.T) {
+	body := fixture(t, "exchangeinfo.json")
+
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/exchangeInfo" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		gotQuery = r.URL.Query().Get("symbols")
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	cache, err := binance.FetchExchangeInfo(ctx, srv.Client(), srv.URL,
+		[]model.Symbol{"BTC-USDT", "USDT-TRY"})
+	if err != nil {
+		t.Fatalf("FetchExchangeInfo: %v", err)
+	}
+	if want := `["BTCUSDT","USDTTRY"]`; gotQuery != want {
+		t.Errorf("symbols = %q, want %q", gotQuery, want)
+	}
+	if _, ok := cache.LookupByNormalized("BTC-USDT"); !ok {
+		t.Error("the parsed cache does not hold BTC-USDT")
+	}
+
+	// No symbols means no parameter, which is the whole venue.
+	if _, err := binance.FetchExchangeInfo(ctx, srv.Client(), srv.URL, nil); err != nil {
+		t.Fatalf("FetchExchangeInfo: %v", err)
+	}
+	if gotQuery != "" {
+		t.Errorf("symbols = %q on an unfiltered request, want it absent", gotQuery)
 	}
 }

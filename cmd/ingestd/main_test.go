@@ -103,6 +103,11 @@ func newFakeVenue(t *testing.T) *fakeVenue {
 	v := &fakeVenue{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v3/exchangeInfo", func(w http.ResponseWriter, r *http.Request) {
+		// The request must name the symbols: the unfiltered response is over
+		// seventeen megabytes and goes into every recording file.
+		if got, want := r.URL.Query().Get("symbols"), `["BTCUSDT"]`; got != want {
+			t.Errorf("exchangeInfo symbols = %q, want %q", got, want)
+		}
 		w.Write(info)
 	})
 	mux.HandleFunc("/api/v3/depth", func(w http.ResponseWriter, r *http.Request) {

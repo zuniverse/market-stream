@@ -1081,3 +1081,97 @@ is no way to know: the frames were never read. What a replay can then say is
 "the recording is missing 12 frames here", which is enough to tell the
 recorder's fault from the venue's, and that is the whole purpose of the
 marker.
+
+---
+
+## D38. Source is one method, and a replay serves snapshots in recorded order
+
+**Chosen:** `Source` is `interface { Run(ctx) error }`. Where the frames go
+and how many can be in flight is settled by the bounded channel a source is
+given at construction, so there is nothing left for the interface to say.
+
+**Rejected:** a wider interface, with `Frames() <-chan model.Frame` or a
+`Name()`. Every method added is a method `*binance.Transport` would have to
+grow to satisfy it. As written it satisfies `Source` with no wrapper and no
+edit, which is the test of whether the seam was put in the right place.
+
+**Chosen:** `ReplaySource` reads the recording twice. The first pass collects
+the metadata and the snapshots; the second replays the frames.
+
+**Rejected:** one pass, serving each snapshot when the stream reaches it. It
+is closer to what happened live, and it couples a shard's fetch to the replay
+position: a book asks for a snapshot and waits for the reader to reach one,
+while the reader waits for the shard to take the frames it is producing. The
+deadlock is avoidable and the reasoning about it is not worth the fidelity.
+The double pass also puts the decompression of everything but frames outside
+the loop a profile measures, which is the right side of that line.
+
+**Chosen:** snapshots are served in recorded order, one per request per
+symbol, regardless of when the request arrives.
+
+**Why:** a book asks for a snapshot when it has no anchor, and any snapshot
+the stream later catches up with will do: the deltas it already covers are
+discarded on replay and the rest are applied in order, so the book converges
+on the same state whenever the answer arrives (M2.4). Matching a request to a
+recorded timestamp instead would tie the result to how fast the replay
+happened to run, which is the one thing a reproducible replay must not depend
+on.
+
+**Chosen:** when a symbol's snapshots are exhausted, the store returns an
+error rather than repeating the last one. Repeating it would have the book
+load a snapshot the stream has already passed, fail to bridge, and ask again,
+which is an endless loop of resyncs that produces a stale book while looking
+busy. The error leaves the book unanchored and the dump says so.
+
+**Chosen:** `cmd/replay` waits for the book stage to go quiet before reading
+any book: every queue empty, every counter still, and every book live. A live
+book has no snapshot request outstanding, since one is only started for a book
+that needs an anchor, so the three conditions together mean the stage is idle
+and its state is final.
+
+**Chosen:** the dump holds the symbol, whether the book is live, the last
+applied id, whether it is crossed, the side depths, and every level. It holds
+no timestamp, no duration, no shard number and no count of frames. Two runs
+differ in all of those and must still compare equal, and a test asserts that
+one shard and eight produce the same bytes: sharding is a routing decision and
+must be invisible in the result.
+
+---
+
+## D39. `exchangeInfo` is fetched for the configured symbols only
+
+**Chosen:** the startup request names the instruments being ingested,
+`/api/v3/exchangeInfo?symbols=["BTCUSDT","ETHUSDT"]`. The normalised symbol is
+joined back into the exchange's spelling by removing the separator.
+
+**Rejected:** fetching the whole venue, which is what M1.2 did and what D16
+describes. On Binance spot that response is 17.5 megabytes. It was tolerable
+while it was only parsed at startup, and it stopped being tolerable when the
+recorder began writing it into the head of every hourly file, where it is both
+past the per-record size limit and repeated once an hour for data about
+thousands of instruments nobody asked for.
+
+**Rejected:** raising the recorder's size limit to fit it. The limit exists so
+that a corrupt file cannot ask for an arbitrary allocation, and the real
+problem is not the limit: it is carrying seventeen megabytes to describe two
+symbols.
+
+**Rejected:** filtering the response locally before recording it. It would
+work and it would make the recorded metadata something this project
+re-encoded rather than what the venue sent, for no saving on the request
+itself.
+
+**Why the join is safe:** D16 rejects splitting a raw symbol into base and
+quote by suffix matching, because the boundary is not derivable and a new
+quote asset breaks it silently. Joining has no such problem: Binance spot
+symbols are the base and quote assets concatenated, and the split this project
+holds came from the venue in the first place. It is also the only direction
+available at that moment, since the request being built is the one that
+creates the cache.
+
+**How it was found:** not by a test. The fixture is trimmed to three symbols,
+so every test passed while the live daemon wrote an error per frame and
+recorded nothing. It took running the binary against the real venue, which is
+the same lesson D22 records about hand-written fixtures, arriving from the
+other direction: a fixture that is smaller than reality hides a size limit as
+surely as one shaped to the code hides a format error.

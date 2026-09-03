@@ -1,12 +1,24 @@
-// Package record implements raw websocket frame recording and replay.
+// Package record captures raw exchange traffic and replays it.
 //
-// Source is the pipeline entry point interface. LiveSource wraps a real
-// websocket connection; ReplaySource reads from a recorded file. Everything
-// downstream is identical in both cases, which is what makes profiling numbers
-// meaningful: the measured code path is the production code path (D5, D6).
+// Recorder writes what a live run received into hourly zstd files: the raw
+// websocket frames, the depth snapshots the book stage fetched, and the
+// instrument metadata, which every file repeats so that one hour replays on
+// its own (D35, D37). It drops rather than blocks when its queue fills, and
+// writes a marker saying how many records it lost, so that a file says what
+// is missing from it.
 //
-// Recording format: each frame is a length-prefixed payload with a receive
-// timestamp, stored in hourly files compressed with zstd. Normalised events
-// are not recorded; recording post-decode would move the decoder outside the
-// measured loop.
+// ReplaySource reads those files back and satisfies Source, the one-method
+// interface the pipeline is fed through. *binance.Transport satisfies it as
+// written, so a live run and a replay differ in nothing downstream: the code
+// path a profile measures is the production code path, which is the whole
+// reason the recorder was built before any optimisation work (D5).
+//
+// Nothing here imports an exchange package, and a recording holds no type
+// that belongs to one. A replay parses frames with whichever decoder wrote
+// them, using the metadata out of the file, and needs no network at all.
+//
+// The accelerated replay caveat is worth repeating wherever its numbers are:
+// compressing time flattens the burst structure of the original feed, so an
+// accelerated run measures maximum throughput and saturation behaviour rather
+// than a realistic load shape.
 package record

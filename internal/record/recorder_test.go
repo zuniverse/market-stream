@@ -238,3 +238,14 @@ func TestRecordSnapshots(t *testing.T) {
 		t.Errorf("%d snapshots recorded, want 1", snapshots)
 	}
 }
+
+// TestRecorderRejectsOversizedMeta covers what a live run found and no test
+// could: Binance's unfiltered exchangeInfo response is over seventeen
+// megabytes, past the per-record limit. Refusing it here means the operator
+// learns at startup rather than from an error per frame for the whole run.
+func TestRecorderRejectsOversizedMeta(t *testing.T) {
+	_, err := record.NewRecorder(t.TempDir(), make([]byte, record.MaxPayloadSize+1), 0, nil)
+	if !errors.Is(err, record.ErrPayloadTooBig) {
+		t.Errorf("NewRecorder = %v, want %v", err, record.ErrPayloadTooBig)
+	}
+}

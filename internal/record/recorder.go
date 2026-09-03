@@ -52,9 +52,10 @@ type Recorder struct {
 	closeOnce sync.Once
 	wg        sync.WaitGroup
 
-	written atomic.Uint64
-	dropped atomic.Uint64
-	files   atomic.Uint64
+	written  atomic.Uint64
+	dropped  atomic.Uint64
+	files    atomic.Uint64
+	openErrs atomic.Uint64
 }
 
 // entry is one pending record on its way to the writer goroutine.
@@ -72,6 +73,13 @@ type entry struct {
 func NewRecorder(dir string, meta []byte, queueCap int, log *slog.Logger) (*Recorder, error) {
 	if len(meta) == 0 {
 		return nil, fmt.Errorf("record: recorder: instrument metadata is required")
+	}
+	if len(meta) > MaxPayloadSize {
+		// Checked here rather than at the first write. The metadata goes into
+		// every file, so metadata that cannot be written means no file can be
+		// written, and an operator should learn that at startup rather than
+		// from an error per frame for the rest of the run.
+		return nil, fmt.Errorf("record: recorder: metadata of %d bytes: %w", len(meta), ErrPayloadTooBig)
 	}
 	if queueCap <= 0 {
 		queueCap = DefaultQueueCap
@@ -200,7 +208,13 @@ func (r *Recorder) run(ctx context.Context) {
 			closeFile()
 			nf, nw, err := r.openFile(ctx, at)
 			if err != nil {
-				r.log.LogAttrs(ctx, slog.LevelError, "recorder open", slog.String("err", err.Error()))
+				// Log the first failure only. If the disk is full or the
+				// directory has gone, every record that follows fails the
+				// same way, and a line per frame buries the one that matters.
+				if r.openErrs.Add(1) == 1 {
+					r.log.LogAttrs(ctx, slog.LevelError, "recorder open", slog.String("err", err.Error()))
+				}
+				r.dropped.Add(1)
 				continue
 			}
 			f, w, hour = nf, nw, at
