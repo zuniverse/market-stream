@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zuniverse/market-stream/internal/pipeline"
+	"github.com/zuniverse/market-stream/internal/record"
 )
 
 // serveMetrics runs the HTTP server that exposes /metrics and /healthz until
@@ -25,11 +26,11 @@ import (
 // Putting an http.Server in the process now is also what architecture.md
 // asks for: the future query API attaches to a server that already exists
 // rather than bringing its own.
-func serveMetrics(ctx context.Context, logger *slog.Logger, addr string, router *pipeline.Router, pub *pipeline.Publisher, cnt *counters) {
+func serveMetrics(ctx context.Context, logger *slog.Logger, addr string, router *pipeline.Router, pub *pipeline.Publisher, rec *record.Recorder, cnt *counters) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		writeMetrics(w, router, pub, cnt)
+		writeMetrics(w, router, pub, rec, cnt)
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -78,7 +79,7 @@ func serveMetrics(ctx context.Context, logger *slog.Logger, addr string, router 
 }
 
 // writeMetrics renders the current counters in the Prometheus text format.
-func writeMetrics(w io.Writer, router *pipeline.Router, pub *pipeline.Publisher, cnt *counters) {
+func writeMetrics(w io.Writer, router *pipeline.Router, pub *pipeline.Publisher, rec *record.Recorder, cnt *counters) {
 	st := router.Stats()
 	counter := func(name, help string, v uint64) {
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n%s %d\n", name, help, name, name, v)
@@ -99,6 +100,13 @@ func writeMetrics(w io.Writer, router *pipeline.Router, pub *pipeline.Publisher,
 	counter("market_stream_queries_total", "Book reads answered.", st.Queries)
 	counter("market_stream_checks_total", "Books compared against a fresh snapshot.", cnt.checks.Load())
 	counter("market_stream_check_divergences_total", "Comparisons that found a divergence.", cnt.divergences.Load())
+
+	if rec != nil {
+		rst := rec.Stats()
+		counter("market_stream_recorded_total", "Records written to disk.", rst.Written)
+		counter("market_stream_record_dropped_total", "Frames lost because the recorder queue was full.", rst.Dropped)
+		counter("market_stream_record_files_total", "Recording files opened.", rst.Files)
+	}
 
 	fmt.Fprintf(w, "# HELP market_stream_shard_queue_depth Events waiting in a shard queue.\n")
 	fmt.Fprintf(w, "# TYPE market_stream_shard_queue_depth gauge\n")

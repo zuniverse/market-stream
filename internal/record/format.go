@@ -21,8 +21,15 @@ const (
 	KindSnapshot
 
 	// KindMeta is the exchange's instrument metadata response, raw. One is
-	// written at the head of every recording.
+	// written at the head of every file, so that any single file of a
+	// recording can be replayed on its own.
 	KindMeta
+
+	// KindDrop reports that the recorder could not keep up and lost frames.
+	// Its payload is the number lost. It exists so that a recording says what
+	// is missing from it: without the marker, a replay sees a sequence gap
+	// and cannot tell the venue's fault from the recorder's (D37).
+	KindDrop
 )
 
 // String returns the kind name, for logs and test failure messages.
@@ -34,6 +41,8 @@ func (k Kind) String() string {
 		return "snapshot"
 	case KindMeta:
 		return "meta"
+	case KindDrop:
+		return "drop"
 	default:
 		return "invalid"
 	}
@@ -76,7 +85,7 @@ var (
 
 func validKind(k Kind) error {
 	switch k {
-	case KindFrame, KindSnapshot, KindMeta:
+	case KindFrame, KindSnapshot, KindMeta, KindDrop:
 		return nil
 	default:
 		return fmt.Errorf("%d: %w", k, ErrUnknownRecKind)

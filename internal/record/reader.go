@@ -22,6 +22,10 @@ type Record struct {
 	ReceivedAt time.Time
 	Payload    []byte
 	Snapshot   model.Snapshot
+
+	// Dropped is the number of frames lost at this point in the recording.
+	// Only set for KindDrop.
+	Dropped uint64
 }
 
 // Frame returns the record as a model.Frame. It is only meaningful for
@@ -96,6 +100,13 @@ func (r *Reader) Next() (Record, error) {
 	}
 	r.n++
 
+	if kind == KindDrop {
+		if len(payload) != 8 {
+			return Record{}, fmt.Errorf("record %d: drop marker of %d bytes: %w", r.n-1, len(payload), ErrCorruptRecord)
+		}
+		rec.Dropped = binary.LittleEndian.Uint64(payload)
+		return rec, nil
+	}
 	if kind == KindSnapshot {
 		if err := json.Unmarshal(payload, &rec.Snapshot); err != nil {
 			return Record{}, fmt.Errorf("record %d: decode snapshot: %w", r.n-1, err)

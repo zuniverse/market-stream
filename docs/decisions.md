@@ -1042,3 +1042,42 @@ kilobytes.
 recording is written until the process stops, so a truncated tail is a fact
 about that run, and reporting it as end-of-file would make a short replay look
 complete.
+
+---
+
+## D37. The recorder drops rather than blocks, and says so in the file
+
+**Chosen:** the recorder owns one goroutine and a bounded queue. Frames and
+snapshots are handed to it without blocking; when the queue is full the record
+is dropped and counted, and the count is written into the recording as a
+`KindDrop` marker before the next record that lands.
+
+**Rejected:** blocking the caller until the recorder catches up. The recorder
+is a side consumer: it hangs off the frame stream and off the snapshot client,
+and nothing downstream waits for it. Blocking would push disk latency back
+through the decoder into the socket reader, and a websocket that stops being
+read is a websocket the venue disconnects, which costs a reconnect and a full
+resync to save a few frames of recording. That is the wrong trade in both
+directions at once.
+
+**Rejected:** dropping silently, with only a counter in the process. The
+counter dies with the run, and what is left on disk is a file with a hole in
+it that looks exactly like a venue that skipped an update. A replay would see
+a sequence gap and blame the exchange. The marker is the same move as D25's
+`Truncated`: the only code that knows something is missing writes it down,
+because nothing downstream can work it out afterwards.
+
+**Chosen:** each hourly file opens with its own copy of the instrument
+metadata, not just the first file of a run. A recording is an archive that
+someone will take one hour out of, and a file that cannot be read without its
+siblings is not one.
+
+**Chosen:** rotation is on the UTC hour. Local time would name two files the
+same hour twice a year and skip an hour once, which is not a property a data
+archive should have.
+
+**Consequence:** the drop marker records how many were lost, not which. There
+is no way to know: the frames were never read. What a replay can then say is
+"the recording is missing 12 frames here", which is enough to tell the
+recorder's fault from the venue's, and that is the whole purpose of the
+marker.

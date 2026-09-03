@@ -23,6 +23,7 @@ import (
 	"github.com/zuniverse/market-stream/internal/exchange/binance"
 	"github.com/zuniverse/market-stream/internal/model"
 	"github.com/zuniverse/market-stream/internal/pipeline"
+	"github.com/zuniverse/market-stream/internal/record"
 )
 
 // Channel capacities. Every channel in the process has an explicit bound and
@@ -56,6 +57,7 @@ type config struct {
 	metricsAddr  string
 	summaryEvery time.Duration
 	checkEvery   time.Duration
+	recordDir    string
 }
 
 // symbolList collects the repeatable -symbols flag. Each value is a
@@ -103,6 +105,7 @@ func main() {
 	flag.StringVar(&cfg.metricsAddr, "metrics-addr", "127.0.0.1:9090", "listen address for /metrics and /healthz")
 	flag.DurationVar(&cfg.summaryEvery, "summary-interval", 30*time.Second, "how often to log a run summary")
 	flag.DurationVar(&cfg.checkEvery, "check-interval", 5*time.Minute, "how often to check each book against a fresh snapshot; 0 disables")
+	flag.StringVar(&cfg.recordDir, "record-dir", "", "directory for hourly recordings; empty disables recording")
 	flag.Parse()
 
 	if len(cfg.symbols) == 0 {
@@ -127,7 +130,11 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 	// decoder, decimal exponents in the log subscriber, and the reverse
 	// lookup that builds the stream URL and the depth requests (D16).
 	httpClient := &http.Client{Timeout: 10 * time.Second}
-	cache, err := binance.FetchExchangeInfo(ctx, httpClient, cfg.restEndpoint)
+	metaBody, err := binance.FetchExchangeInfoRaw(ctx, httpClient, cfg.restEndpoint)
+	if err != nil {
+		return err
+	}
+	cache, err := binance.ParseExchangeInfo(metaBody)
 	if err != nil {
 		return err
 	}
@@ -136,6 +143,24 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 		return err
 	}
 	depth := binance.NewDepthClient(httpClient, cfg.restEndpoint, cache, 0)
+
+	// The recorder sits beside the pipeline rather than in it: it sees every
+	// frame and every snapshot, and nothing waits for it (D37). A recording
+	// needs the snapshots as much as the frames, since a replayed book is
+	// anchored on one (D35).
+	var recorder *record.Recorder
+	snapshots := pipeline.Snapshotter(depth)
+	if cfg.recordDir != "" {
+		recorder, err = record.NewRecorder(cfg.recordDir, metaBody, 0, logger)
+		if err != nil {
+			return err
+		}
+		if err := recorder.Start(ctx); err != nil {
+			return err
+		}
+		defer recorder.Close()
+		snapshots = record.RecordSnapshots(recorder, depth)
+	}
 
 	// Every normalised event leaves this process through the publisher. The
 	// binary must not write pipeline events directly, or the fan-out seam
@@ -153,7 +178,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 	router, err := pipeline.NewRouter(pipeline.RouterConfig{
 		Shards:    cfg.shards,
 		QueueCap:  shardQueueCap,
-		Snapshots: depth,
+		Snapshots: snapshots,
 		Log:       logger,
 	})
 	if err != nil {
@@ -178,7 +203,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		serveMetrics(workers, logger, cfg.metricsAddr, router, pub, &cnt)
+		serveMetrics(workers, logger, cfg.metricsAddr, router, pub, recorder, &cnt)
 	}()
 
 	if cfg.checkEvery > 0 {
@@ -202,7 +227,8 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 		slog.String("symbols", cfg.symbols.String()),
 		slog.Int("shards", router.Shards()),
 		slog.Int("depth_limit", depth.Limit()),
-		slog.String("metrics_addr", cfg.metricsAddr))
+		slog.String("metrics_addr", cfg.metricsAddr),
+		slog.String("record_dir", cfg.recordDir))
 
 	dec := binance.NewDecoder(cache)
 	ticker := time.NewTicker(cfg.summaryEvery)
@@ -212,6 +238,11 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 		select {
 		case f := <-frames:
 			cnt.frames.Add(1)
+			if recorder != nil {
+				// Before decoding: what is recorded is what arrived, so that
+				// the decoder stays inside the loop a profile measures (D6).
+				recorder.Frame(f)
+			}
 			ev, err := dec.Decode(f)
 			if err != nil {
 				cnt.decodeErrs.Add(1)
@@ -228,7 +259,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 			pub.Publish(ev)
 
 		case <-ticker.C:
-			logSummary(ctx, logger, router, pub, &cnt)
+			logSummary(ctx, logger, router, pub, recorder, &cnt)
 
 		case err := <-errc:
 			return err
@@ -239,7 +270,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 // logSummary writes one line describing the run so far. M6 replaces the
 // counters here with the histograms that give the same picture with
 // percentiles rather than totals.
-func logSummary(ctx context.Context, logger *slog.Logger, router *pipeline.Router, pub *pipeline.Publisher, cnt *counters) {
+func logSummary(ctx context.Context, logger *slog.Logger, router *pipeline.Router, pub *pipeline.Publisher, rec *record.Recorder, cnt *counters) {
 	st := router.Stats()
 	logger.LogAttrs(ctx, slog.LevelInfo, "summary",
 		slog.Uint64("frames", cnt.frames.Load()),
@@ -257,7 +288,21 @@ func logSummary(ctx context.Context, logger *slog.Logger, router *pipeline.Route
 			slog.Uint64("run", cnt.checks.Load()),
 			slog.Uint64("diverged", cnt.divergences.Load())),
 		slog.Any("queue_depth", router.QueueDepth()),
+		recordAttr(rec),
 		droppedAttr(pub))
+}
+
+// recordAttr renders the recorder's counters, or an empty group when nothing
+// is being recorded.
+func recordAttr(rec *record.Recorder) slog.Attr {
+	if rec == nil {
+		return slog.Group("recording")
+	}
+	st := rec.Stats()
+	return slog.Group("recording",
+		slog.Uint64("written", st.Written),
+		slog.Uint64("dropped", st.Dropped),
+		slog.Uint64("files", st.Files))
 }
 
 // droppedAttr renders the publisher's per-subscriber drop counters as a log

@@ -120,6 +120,21 @@ func ParseExchangeInfo(data []byte) (*InstrumentCache, error) {
 // FetchExchangeInfo fetches /api/v3/exchangeInfo from baseURL and returns a
 // parsed InstrumentCache. baseURL should not include a trailing slash.
 func FetchExchangeInfo(ctx context.Context, client *http.Client, baseURL string) (*InstrumentCache, error) {
+	body, err := FetchExchangeInfoRaw(ctx, client, baseURL)
+	if err != nil {
+		return nil, err
+	}
+	return ParseExchangeInfo(body)
+}
+
+// FetchExchangeInfoRaw fetches /api/v3/exchangeInfo and returns the response
+// body unparsed.
+//
+// The recorder writes this body into every recording so that a replay can
+// rebuild the instrument metadata without a network (D35). It is the raw
+// bytes rather than the parsed cache because the cache is this package's
+// type, and a recording must not carry one.
+func FetchExchangeInfoRaw(ctx context.Context, client *http.Client, baseURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/v3/exchangeInfo", nil)
 	if err != nil {
 		return nil, fmt.Errorf("binance: build exchangeInfo request: %w", err)
@@ -137,7 +152,7 @@ func FetchExchangeInfo(ctx context.Context, client *http.Client, baseURL string)
 	if err != nil {
 		return nil, fmt.Errorf("binance: read exchangeInfo body: %w", err)
 	}
-	return ParseExchangeInfo(data)
+	return data, nil
 }
 
 // sizeDecimals converts a Binance size string such as "0.01000000" to the

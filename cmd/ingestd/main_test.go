@@ -20,6 +20,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/zuniverse/market-stream/internal/model"
 	"github.com/zuniverse/market-stream/internal/pipeline"
+	"github.com/zuniverse/market-stream/internal/record"
 )
 
 func TestSymbolListSet(t *testing.T) {
@@ -160,6 +161,7 @@ func TestRunEndToEnd(t *testing.T) {
 		// running, so a comparison would diverge by construction. The
 		// harness itself is covered in internal/pipeline.
 		checkEvery: 0,
+		recordDir:  t.TempDir(),
 	}
 
 	var out syncWriter
@@ -204,6 +206,13 @@ func TestRunEndToEnd(t *testing.T) {
 		t.Errorf("healthz = HTTP %d", resp.StatusCode)
 	}
 
+	if got := metricValue(t, body, "market_stream_recorded_total"); got == 0 {
+		t.Error("nothing was recorded")
+	}
+	if got := metricValue(t, body, "market_stream_record_dropped_total"); got != 0 {
+		t.Errorf("the recorder dropped %d frames on a local run", got)
+	}
+
 	cancel()
 	select {
 	case err := <-done:
@@ -217,6 +226,55 @@ func TestRunEndToEnd(t *testing.T) {
 	// The metrics listener must be gone with it.
 	if _, err := http.Get("http://" + addr + "/healthz"); err == nil {
 		t.Error("the metrics server is still listening after shutdown")
+	}
+
+	assertRecordingUsable(t, cfg.recordDir)
+}
+
+// assertRecordingUsable reads back what the run recorded and checks it holds
+// the three things a replay needs: the instrument metadata, the frames, and
+// at least one snapshot to anchor a book on.
+func assertRecordingUsable(t *testing.T, dir string) {
+	t.Helper()
+	names, err := filepath.Glob(filepath.Join(dir, "*"+record.FileSuffix))
+	if err != nil || len(names) == 0 {
+		t.Fatalf("no recording in %s: %v", dir, err)
+	}
+	f, err := os.Open(names[0])
+	if err != nil {
+		t.Fatalf("open recording: %v", err)
+	}
+	defer f.Close()
+	r, err := record.NewReader(f)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+
+	var kinds []record.Kind
+	counts := map[record.Kind]int{}
+	for {
+		rec, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next after %d records: %v", len(kinds), err)
+		}
+		kinds = append(kinds, rec.Kind)
+		counts[rec.Kind]++
+	}
+	if len(kinds) == 0 || kinds[0] != record.KindMeta {
+		t.Fatalf("the recording does not open with the instrument metadata: %v", kinds)
+	}
+	if counts[record.KindFrame] == 0 {
+		t.Error("no frame was recorded")
+	}
+	if counts[record.KindSnapshot] == 0 {
+		t.Error("no snapshot was recorded, so a replay could never anchor a book")
+	}
+	if counts[record.KindDrop] != 0 {
+		t.Errorf("the recording reports %d drop markers", counts[record.KindDrop])
 	}
 }
 
@@ -297,7 +355,7 @@ func TestMetricsTextFormat(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	writeMetrics(&buf, router, pub, &counters{})
+	writeMetrics(&buf, router, pub, nil, &counters{})
 	body := buf.String()
 
 	var samples, types, helps int

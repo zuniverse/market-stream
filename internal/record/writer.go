@@ -69,6 +69,14 @@ func (w *Writer) WriteSnapshot(at time.Time, s model.Snapshot) error {
 	return w.write(KindSnapshot, at, payload)
 }
 
+// WriteDropped records that n frames were lost before this point because the
+// recorder could not keep up.
+func (w *Writer) WriteDropped(at time.Time, n uint64) error {
+	var payload [8]byte
+	binary.LittleEndian.PutUint64(payload[:], n)
+	return w.write(KindDrop, at, payload[:])
+}
+
 // Records returns how many records have been written.
 func (w *Writer) Records() uint64 { return w.n }
 
