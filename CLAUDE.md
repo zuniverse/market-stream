@@ -1,8 +1,9 @@
 # market-stream
 
-Real-time crypto market data pipeline in Go. Ingests public websocket feeds,
-reconstructs order books, and is built as a study in concurrency design and
-profiling under sustained load.
+Real-time crypto market data pipeline in Go. Ingests public websocket feeds
+and reconstructs order books. The effort goes into concurrency design and
+profiling: every decision is recorded with the alternatives it beat, every
+performance claim with the profile it came from.
 
 The project targets a narrow, well-executed scope: correct book
 reconstruction, predictable behaviour under load, and observable internals.

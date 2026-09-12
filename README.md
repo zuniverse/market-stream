@@ -1,8 +1,9 @@
 # market-stream
 
-Real-time crypto market data pipeline in Go. Ingests public websocket feeds,
-reconstructs order books, and is built as a study in concurrency design and
-profiling under sustained load.
+Real-time crypto market data pipeline in Go. Ingests public websocket feeds
+and reconstructs order books. The effort goes into concurrency design and
+profiling: every decision is recorded with the alternatives it beat, every
+performance claim with the profile it came from.
 
 > **Status:** under active development toward v0.1. Not yet suitable for
 > production use or as a library dependency.
@@ -18,8 +19,10 @@ profiling under sustained load.
   replay with no network
 - Exposes Prometheus metrics on `/metrics`
 
-Not built yet: the optimisation pass (M5), latency histograms (M6), and
-everything in the backlog.
+Not built yet: `cmd/loadgen`, and with it the saturation figures. Nothing
+here has yet been put under sustained pressure: replaying the reference
+corpus is a burst of a few hundred milliseconds, and the live feed delivers
+roughly 1/550th of what the pipeline will take. The rest is the backlog.
 
 ## Design notes
 
